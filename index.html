@@ -393,7 +393,7 @@
             };
 
             // Close modal immediately for better UX
-            document.querySelector('.fixed')?.remove();
+            document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
             try {
                 if (editId) {
@@ -547,7 +547,7 @@
             };
 
             // Close modal immediately for better UX
-            document.querySelector('.fixed')?.remove();
+            document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
             try {
                 if (editId) {
@@ -592,7 +592,7 @@
             }
 
             // Close modal immediately for better UX
-            document.querySelector('.fixed')?.remove();
+            document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
             try {
                 if (editId) {
