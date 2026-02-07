@@ -308,6 +308,9 @@
                 status: form.status.value
             };
 
+            // Close modal immediately for better UX
+            document.querySelector('.fixed')?.remove();
+
             try {
                 if (editId) {
                     // Edit existing order
@@ -331,7 +334,6 @@
                     mockData.orders.unshift(newOrder);
                 }
 
-                document.querySelector('.fixed')?.remove();
                 showToast('บันทึกสำเร็จ!');
                 render();
             } catch (error) {
@@ -460,6 +462,9 @@
                 location: form.location.value
             };
 
+            // Close modal immediately for better UX
+            document.querySelector('.fixed')?.remove();
+
             try {
                 if (editId) {
                     // Edit existing item
@@ -482,7 +487,6 @@
                     mockData.inventory.push(newItem);
                 }
 
-                document.querySelector('.fixed')?.remove();
                 showToast('บันทึกสำเร็จ!');
                 render();
             } catch (error) {
@@ -490,7 +494,7 @@
             }
         };
 
-        window.handleSiloSave = function (form, editId = '') {
+        window.handleSiloSave = async function (form, editId = '') {
             const siloData = {
                 rice: form.rice.value.trim(),
                 amount: parseNum(form.amount.value),
@@ -503,20 +507,27 @@
                 return;
             }
 
-            if (editId) {
-                // Edit existing silo
-                const index = mockData.silos.findIndex(s => s.id === editId);
-                if (index !== -1) {
-                    mockData.silos[index] = {
-                        ...mockData.silos[index],
-                        ...siloData
-                    };
-                }
-            }
-
+            // Close modal immediately for better UX
             document.querySelector('.fixed')?.remove();
-            showToast('บันทึกสำเร็จ!');
-            render();
+
+            try {
+                if (editId) {
+                    // Edit existing silo
+                    const index = mockData.silos.findIndex(s => s.id === editId);
+                    if (index !== -1) {
+                        mockData.silos[index] = {
+                            ...mockData.silos[index],
+                            ...siloData
+                        };
+                        await saveToFirestore('silos', mockData.silos[index]);
+                    }
+                }
+
+                showToast('บันทึกสำเร็จ!');
+                render();
+            } catch (error) {
+                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
+            }
         };
 
         async function deleteOrder(id) {
