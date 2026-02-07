@@ -74,6 +74,49 @@
 
         // ===================== FIREBASE HELPERS =====================
         let isLoading = true;
+        const CACHE_KEY = 'kamol_rice_cache';
+
+        // Load cached data immediately on startup
+        function loadFromCache() {
+            try {
+                const cached = localStorage.getItem(CACHE_KEY);
+                if (cached) {
+                    const data = JSON.parse(cached);
+                    // Merge cached data with mockData
+                    Object.keys(data).forEach(key => {
+                        if (mockData[key]) {
+                            mockData[key] = data[key];
+                        }
+                    });
+                    // Sort silos
+                    mockData.silos.sort((a, b) => (a.number || 0) - (b.number || 0));
+                    console.log('⚡ Loaded from cache instantly');
+                    isLoading = false;
+                    render();
+                    return true;
+                }
+            } catch (e) {
+                console.error('Cache load error:', e);
+            }
+            return false;
+        }
+
+        // Save data to cache
+        function saveToCache() {
+            try {
+                const dataToCache = {
+                    silos: mockData.silos,
+                    orders: mockData.orders,
+                    inventory: mockData.inventory,
+                    production: mockData.production,
+                    customers: mockData.customers
+                };
+                localStorage.setItem(CACHE_KEY, JSON.stringify(dataToCache));
+                console.log('💾 Saved to cache');
+            } catch (e) {
+                console.error('Cache save error:', e);
+            }
+        }
 
         async function loadDataFromFirestore() {
             try {
@@ -102,6 +145,7 @@
                 }
                 console.log('✅ Loaded data from Firestore');
                 isLoading = false;
+                saveToCache(); // Save to cache for next visit
                 render();
             } catch (error) {
                 console.error('❌ Error loading from Firestore:', error);
@@ -1227,8 +1271,12 @@
         }
 
         // ===================== INIT =====================
-        render();
-        // Seed silos and load data from Firestore after initial render
+        // Try to load from cache first for instant display
+        const hasCached = loadFromCache();
+        if (!hasCached) {
+            render(); // Initial render with mock data if no cache
+        }
+        // Then sync with Firestore in background
         seedSilosToFirestore().then(() => loadDataFromFirestore());
     </script>
 </body>
