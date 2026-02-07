@@ -73,19 +73,59 @@
         const db = firebase.firestore();
 
         // ===================== FIREBASE HELPERS =====================
+        let isLoading = true;
+
         async function loadDataFromFirestore() {
             try {
                 const collections = ['orders', 'inventory', 'customers', 'production', 'silos', 'yields', 'logs'];
                 for (const collName of collections) {
                     const snapshot = await db.collection(collName).get();
                     if (!snapshot.empty) {
-                        mockData[collName] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        const firestoreData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        // For silos: replace entirely with Firestore data
+                        if (collName === 'silos') {
+                            mockData.silos = firestoreData;
+                            // Sort silos by number
+                            mockData.silos.sort((a, b) => (a.number || 0) - (b.number || 0));
+                        } else {
+                            // For other collections: merge
+                            firestoreData.forEach(fsItem => {
+                                const existingIndex = mockData[collName].findIndex(m => m.id === fsItem.id);
+                                if (existingIndex !== -1) {
+                                    mockData[collName][existingIndex] = fsItem;
+                                } else {
+                                    mockData[collName].push(fsItem);
+                                }
+                            });
+                        }
                     }
                 }
                 console.log('✅ Loaded data from Firestore');
+                isLoading = false;
                 render();
             } catch (error) {
                 console.error('❌ Error loading from Firestore:', error);
+                isLoading = false;
+                render();
+            }
+        }
+
+        // Seed initial silos to Firestore only if empty
+        async function seedSilosToFirestore() {
+            try {
+                const snapshot = await db.collection('silos').get();
+                // Only seed if Firestore has no silos
+                if (snapshot.empty) {
+                    console.log('🌱 Seeding silos to Firestore...');
+                    for (const silo of mockData.silos) {
+                        await db.collection('silos').doc(silo.id).set(silo);
+                    }
+                    console.log('✅ Silos seeded successfully');
+                } else {
+                    console.log('ℹ️ Silos already exist in Firestore, skipping seed');
+                }
+            } catch (error) {
+                console.error('❌ Error seeding silos:', error);
             }
         }
 
@@ -1089,7 +1129,16 @@
                 default: content = '<div class="text-center py-20 text-gray-500 dark:text-gray-400">กำลังพัฒนา...</div>';
             }
 
+            // Add loading indicator
+            const loadingIndicator = isLoading ? `
+                <div class="fixed top-4 right-4 z-50 bg-white dark:bg-gray-800 shadow-lg rounded-xl px-4 py-2 flex items-center gap-2 border border-green-200 dark:border-green-800">
+                    <div class="animate-spin w-5 h-5 border-2 border-green-600 border-t-transparent rounded-full"></div>
+                    <span class="text-sm text-green-700 dark:text-green-400 font-medium">กำลังโหลดข้อมูล...</span>
+                </div>
+            ` : '';
+
             document.getElementById('app').innerHTML = `
+                ${loadingIndicator}
                 <div class="flex h-screen">
                     <!-- Mobile Menu Overlay -->
                     ${mobileMenuOpen ? `<div class="fixed inset-0 bg-black/50 z-40 lg:hidden" onclick="mobileMenuOpen = false; render();"></div>` : ''}
@@ -1179,8 +1228,8 @@
 
         // ===================== INIT =====================
         render();
-        // Load data from Firestore after initial render
-        loadDataFromFirestore();
+        // Seed silos and load data from Firestore after initial render
+        seedSilosToFirestore().then(() => loadDataFromFirestore());
     </script>
 </body>
 
