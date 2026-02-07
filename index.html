@@ -6,6 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ระบบบริหารจัดการโรงสีข้าว - Kamol Rice ERP (Demo)</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -54,6 +57,64 @@
     <div id="app"></div>
 
     <script>
+        // ===================== FIREBASE CONFIG =====================
+        const firebaseConfig = {
+            apiKey: "AIzaSyB5U6rFawVY6yrgcsY2GULM5BG17I44jAY",
+            authDomain: "kamol-rice-erp.firebaseapp.com",
+            projectId: "kamol-rice-erp",
+            storageBucket: "kamol-rice-erp.firebasestorage.app",
+            messagingSenderId: "866847777645",
+            appId: "1:866847777645:web:d09842ab6cd60199d2f064",
+            measurementId: "G-4LQWVXX0Q6"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // ===================== FIREBASE HELPERS =====================
+        async function loadDataFromFirestore() {
+            try {
+                const collections = ['orders', 'inventory', 'customers', 'production', 'silos', 'yields', 'logs'];
+                for (const collName of collections) {
+                    const snapshot = await db.collection(collName).get();
+                    if (!snapshot.empty) {
+                        mockData[collName] = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    }
+                }
+                console.log('✅ Loaded data from Firestore');
+                render();
+            } catch (error) {
+                console.error('❌ Error loading from Firestore:', error);
+            }
+        }
+
+        async function saveToFirestore(collection, data) {
+            try {
+                if (data.id && !data.id.startsWith('temp_')) {
+                    await db.collection(collection).doc(data.id).set(data);
+                } else {
+                    const docRef = await db.collection(collection).add(data);
+                    data.id = docRef.id;
+                }
+                console.log(`✅ Saved to ${collection}:`, data.id);
+                return data.id;
+            } catch (error) {
+                console.error(`❌ Error saving to ${collection}:`, error);
+                throw error;
+            }
+        }
+
+        async function deleteFromFirestore(collection, id) {
+            try {
+                await db.collection(collection).doc(id).delete();
+                console.log(`✅ Deleted from ${collection}:`, id);
+            } catch (error) {
+                console.error(`❌ Error deleting from ${collection}:`, error);
+                throw error;
+            }
+        }
+
         // ===================== MOCK DATA =====================
         const mockData = {
             orders: [
@@ -237,7 +298,7 @@
             showModal(item ? '✏️ แก้ไขคำสั่งซื้อ' : '➕ เพิ่มคำสั่งซื้อใหม่', form);
         }
 
-        window.handleOrderSave = function (form, editId = '') {
+        window.handleOrderSave = async function (form, editId = '') {
             const orderData = {
                 date: form.date.value,
                 customer: form.customer.value,
@@ -247,28 +308,35 @@
                 status: form.status.value
             };
 
-            if (editId) {
-                // Edit existing order
-                const index = mockData.orders.findIndex(o => o.id === editId);
-                if (index !== -1) {
-                    mockData.orders[index] = {
-                        ...mockData.orders[index],
-                        ...orderData
+            try {
+                if (editId) {
+                    // Edit existing order
+                    const index = mockData.orders.findIndex(o => o.id === editId);
+                    if (index !== -1) {
+                        mockData.orders[index] = {
+                            ...mockData.orders[index],
+                            ...orderData
+                        };
+                        await saveToFirestore('orders', mockData.orders[index]);
+                    }
+                } else {
+                    // Add new order
+                    const newOrder = {
+                        ...orderData,
+                        id: 'temp_' + Date.now().toString(),
+                        displayId: `#ORD-${Math.floor(Math.random() * 9000) + 1000}`
                     };
+                    const newId = await saveToFirestore('orders', newOrder);
+                    newOrder.id = newId;
+                    mockData.orders.unshift(newOrder);
                 }
-            } else {
-                // Add new order
-                const newOrder = {
-                    ...orderData,
-                    id: Date.now().toString(),
-                    displayId: `#ORD-${Math.floor(Math.random() * 9000) + 1000}`
-                };
-                mockData.orders.unshift(newOrder);
-            }
 
-            document.querySelector('.fixed')?.remove();
-            showToast('บันทึกสำเร็จ!');
-            render();
+                document.querySelector('.fixed')?.remove();
+                showToast('บันทึกสำเร็จ!');
+                render();
+            } catch (error) {
+                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
+            }
         };
 
         window.editOrder = function (id) {
@@ -383,7 +451,7 @@
             showModal('🏭 แก้ไขสถานะไซโล', form);
         }
 
-        window.handleInventorySave = function (form, editId = '') {
+        window.handleInventorySave = async function (form, editId = '') {
             const itemData = {
                 code: form.code.value,
                 item: form.item.value,
@@ -392,27 +460,34 @@
                 location: form.location.value
             };
 
-            if (editId) {
-                // Edit existing item
-                const index = mockData.inventory.findIndex(i => i.id === editId);
-                if (index !== -1) {
-                    mockData.inventory[index] = {
-                        ...mockData.inventory[index],
-                        ...itemData
+            try {
+                if (editId) {
+                    // Edit existing item
+                    const index = mockData.inventory.findIndex(i => i.id === editId);
+                    if (index !== -1) {
+                        mockData.inventory[index] = {
+                            ...mockData.inventory[index],
+                            ...itemData
+                        };
+                        await saveToFirestore('inventory', mockData.inventory[index]);
+                    }
+                } else {
+                    // Add new item
+                    const newItem = {
+                        ...itemData,
+                        id: 'temp_' + Date.now().toString()
                     };
+                    const newId = await saveToFirestore('inventory', newItem);
+                    newItem.id = newId;
+                    mockData.inventory.push(newItem);
                 }
-            } else {
-                // Add new item
-                const newItem = {
-                    ...itemData,
-                    id: Date.now().toString()
-                };
-                mockData.inventory.push(newItem);
-            }
 
-            document.querySelector('.fixed')?.remove();
-            showToast('บันทึกสำเร็จ!');
-            render();
+                document.querySelector('.fixed')?.remove();
+                showToast('บันทึกสำเร็จ!');
+                render();
+            } catch (error) {
+                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
+            }
         };
 
         window.handleSiloSave = function (form, editId = '') {
@@ -444,19 +519,29 @@
             render();
         };
 
-        function deleteOrder(id) {
+        async function deleteOrder(id) {
             if (confirm('ยืนยันการลบ?')) {
-                mockData.orders = mockData.orders.filter(o => o.id !== id);
-                showToast('ลบสำเร็จ!');
-                render();
+                try {
+                    await deleteFromFirestore('orders', id);
+                    mockData.orders = mockData.orders.filter(o => o.id !== id);
+                    showToast('ลบสำเร็จ!');
+                    render();
+                } catch (error) {
+                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
+                }
             }
         }
 
-        window.deleteInventory = function (id) {
+        window.deleteInventory = async function (id) {
             if (confirm('ยืนยันการลบสินค้านี้?')) {
-                mockData.inventory = mockData.inventory.filter(i => i.id !== id);
-                showToast('ลบสินค้าสำเร็จ!');
-                render();
+                try {
+                    await deleteFromFirestore('inventory', id);
+                    mockData.inventory = mockData.inventory.filter(i => i.id !== id);
+                    showToast('ลบสินค้าสำเร็จ!');
+                    render();
+                } catch (error) {
+                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
+                }
             }
         };
 
@@ -1083,6 +1168,8 @@
 
         // ===================== INIT =====================
         render();
+        // Load data from Firestore after initial render
+        loadDataFromFirestore();
     </script>
 </body>
 
