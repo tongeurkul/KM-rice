@@ -107,6 +107,7 @@
                 const dataToCache = {
                     silos: mockData.silos,
                     orders: mockData.orders,
+                    salesOrders: mockData.salesOrders,
                     inventory: mockData.inventory,
                     production: mockData.production,
                     customers: mockData.customers
@@ -120,7 +121,7 @@
 
         async function loadDataFromFirestore() {
             try {
-                const collections = ['orders', 'inventory', 'customers', 'production', 'silos', 'yields', 'logs'];
+                const collections = ['orders', 'salesOrders', 'inventory', 'customers', 'production', 'silos', 'yields', 'logs'];
                 for (const collName of collections) {
                     const snapshot = await db.collection(collName).get();
                     if (!snapshot.empty) {
@@ -243,6 +244,7 @@
                 { id: '4', item: 'SILO-1: ข้าวเปลือกหอมมะลิ', type: 'OUT', change: -10000, reason: 'ตัดวัตถุดิบ (ผลิต) #P-2001', createdAt: '2024-02-01T08:00:00' },
                 { id: '5', item: 'กระสอบ 50 กก.', type: 'OUT', change: -150, reason: 'ตัดบรรจุภัณฑ์ (ผลิต) #P-2001', createdAt: '2024-02-01T08:05:00' }
             ],
+            salesOrders: [],
             silos: [
                 { id: '1', number: 1, rice: 'ข้าวเปลือกหอมมะลิ', amount: 35000, capacity: 50000 },
                 { id: '2', number: 2, rice: 'ข้าวเปลือกหอมมะลิ', amount: 28000, capacity: 50000 },
@@ -263,7 +265,10 @@
         // ===================== APP STATE =====================
         let currentMenu = 'dashboard';
         let darkMode = localStorage.getItem('darkMode') === 'true';
+        let soCounter = parseInt(localStorage.getItem('soCounter') || '0');
         let mobileMenuOpen = false;
+        let soFilter = 'ทั้งหมด';
+        let soSort = 'orderDate-desc';
 
         // ===================== ICONS =====================
         const icons = {
@@ -272,8 +277,27 @@
             inventory: '📦', customers: '👥', logs: '📜', sun: '☀️', moon: '🌙',
             save: '💾', search: '🔍', filter: '🔽', alert: '⚠️', check: '✓',
             silo: '🏭', warehouse: '🏢', box: '📦', chart: '📈', money: '💰',
-            truck: '🚚', factory: '🏭', archive: '📁'
+            truck: '🚚', factory: '🏭', archive: '📁', so: '📝'
         };
+
+        // ===================== PRODUCT CATALOG =====================
+        const PRODUCT_CATALOG = [
+            { name: 'ข้าวเหนียวใหม่ ตราปลาวาฬ', category: 'ข้าวสาร', sizes: [15, 40, 48] },
+            { name: 'ข้าวเหนียวเก่า ตราไผ่ทอง', category: 'ข้าวสาร', sizes: [15, 40, 48] },
+            { name: 'ข้าวเหนียว ตราปลาสิงห์โต', category: 'ข้าวสาร', sizes: [15, 40, 48] },
+            { name: 'ข้าวเหนียว ตราไก่ไทย', category: 'ข้าวสาร', sizes: [15, 40, 48] },
+            { name: 'ข้าวหอมมะลิใหม่', category: 'ข้าวสาร', sizes: [5, 15, 48] },
+            { name: 'ข้าวหอมมะลิ Premium', category: 'ข้าวสาร', sizes: [5, 15, 48] },
+            { name: 'ข้าวปทุมธานี', category: 'ข้าวสาร', sizes: [5, 15, 48] },
+            { name: 'ข้าวสังข์หยด', category: 'ข้าวสาร', sizes: [5, 15] },
+            { name: 'ปลายข้าว', category: 'ผลพลอยได้', sizes: [25, 50] },
+            { name: 'รำอ่อน', category: 'ผลพลอยได้', sizes: [25, 30] },
+            { name: 'แกลบ', category: 'ผลพลอยได้', sizes: [30, 50] },
+        ];
+
+        const DELIVERY_METHODS = ['รถโรงสีไปส่ง', 'รถร่วม/รถรับจ้าง', 'ลูกค้ามารับเอง (FOB)'];
+        const FREIGHT_TERMS = ['ราคาขายรวมค่าส่งแล้ว', 'คิดค่าจัดส่งแยกต่างหาก', 'ลูกค้าจ่ายค่าขนส่งปลายทาง'];
+        const PAYMENT_TERMS = ['เงินสด (COD)', 'เครดิต 7 วัน', 'เครดิต 15 วัน', 'เครดิต 30 วัน'];
 
         // ===================== HELPER FUNCTIONS =====================
         function parseNum(val) {
@@ -331,104 +355,611 @@
             return modal;
         }
 
-        function openOrderForm(item = null) {
-            const editId = item?.id || '';
-            const form = `
-                <form onsubmit="event.preventDefault(); handleOrderSave(this, '${editId}'); return false;">
-                    <div class="space-y-5">
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">วันที่สั่ง</label>
-                                <input type="date" name="date" value="${item?.date || new Date().toISOString().split('T')[0]}" required 
-                                    class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">สถานะ</label>
-                                <select name="status" required class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all">
-                                    <option value="รอดำเนินการ" ${item?.status === 'รอดำเนินการ' ? 'selected' : ''}>รอดำเนินการ</option>
-                                    <option value="กำลังส่ง" ${item?.status === 'กำลังส่ง' ? 'selected' : ''}>กำลังส่ง</option>
-                                    <option value="สำเร็จ" ${item?.status === 'สำเร็จ' ? 'selected' : ''}>สำเร็จ</option>
+        // ===================== SO NUMBER GENERATION =====================
+        function generateSONumber() {
+            const now = new Date();
+            const yy = (now.getFullYear() + 543).toString().slice(-2); // Buddhist era
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            soCounter++;
+            localStorage.setItem('soCounter', soCounter.toString());
+            return `SO${yy}${mm}-${String(soCounter).padStart(4, '0')}`;
+        }
+
+        // ===================== SO LINE ITEMS STATE =====================
+        let soLineItems = [{ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
+
+        function addSOLineItem() {
+            soLineItems.push({ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 });
+            rerenderSOItems();
+        }
+
+        function removeSOLineItem(idx) {
+            if (soLineItems.length <= 1) return;
+            soLineItems.splice(idx, 1);
+            rerenderSOItems();
+            recalcSOTotals();
+        }
+
+        function onSOItemChange(idx, field, value) {
+            soLineItems[idx][field] = value;
+            if (field === 'product') {
+                // reset pack size when product changes
+                soLineItems[idx].packSize = '';
+            }
+            // Recalc this row
+            const item = soLineItems[idx];
+            const qty = parseNum(item.qty);
+            const price = parseNum(item.unitPrice);
+            const pack = parseNum(item.packSize);
+            item.amount = qty * price;
+            item.totalWeight = qty * pack;
+
+            if (field === 'product') {
+                rerenderSOItems();
+            } else {
+                // Update just the computed fields for this row
+                const amtEl = document.getElementById(`so-item-amount-${idx}`);
+                const wgtEl = document.getElementById(`so-item-weight-${idx}`);
+                if (amtEl) amtEl.textContent = formatNumber(item.amount);
+                if (wgtEl) wgtEl.textContent = pack > 0 && qty > 0 ? `${formatNumber(item.totalWeight)} กก.` : '-';
+            }
+            recalcSOTotals();
+        }
+
+        function recalcSOTotals() {
+            const subtotal = soLineItems.reduce((s, i) => s + (parseNum(i.qty) * parseNum(i.unitPrice)), 0);
+            const discountEl = document.getElementById('so-discount');
+            const discount = discountEl ? parseNum(discountEl.value) : 0;
+            const grand = subtotal - discount;
+
+            const subEl = document.getElementById('so-subtotal');
+            const grandEl = document.getElementById('so-grandtotal');
+            const totalWeightEl = document.getElementById('so-total-weight');
+            if (subEl) subEl.textContent = formatCurrency(subtotal);
+            if (grandEl) grandEl.textContent = formatCurrency(grand);
+
+            const totalWeight = soLineItems.reduce((s, i) => s + (parseNum(i.qty) * parseNum(i.packSize)), 0);
+            if (totalWeightEl) totalWeightEl.textContent = totalWeight > 0 ? `${formatNumber(totalWeight)} กก. (${(totalWeight / 1000).toFixed(2)} ตัน)` : '-';
+        }
+
+        function getSOItemSizes(productName) {
+            const p = PRODUCT_CATALOG.find(c => c.name === productName);
+            return p ? p.sizes : [];
+        }
+
+        function rerenderSOItems() {
+            const container = document.getElementById('so-items-container');
+            if (!container) return;
+            container.innerHTML = soLineItems.map((item, idx) => {
+                const sizes = getSOItemSizes(item.product);
+                return `
+                    <div class="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 border border-gray-200 dark:border-gray-700 fade-in">
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="text-xs font-bold text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-1 rounded-lg">#${idx + 1}</span>
+                            ${soLineItems.length > 1 ? `<button type="button" onclick="removeSOLineItem(${idx})" class="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 p-1.5 rounded-lg transition-all text-sm" title="ลบรายการ">🗑️</button>` : ''}
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-6 gap-3">
+                            <div class="md:col-span-2">
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">สินค้า</label>
+                                <select onchange="onSOItemChange(${idx}, 'product', this.value)" class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
+                                    <option value="">-- เลือกสินค้า --</option>
+                                    <optgroup label="ข้าวสาร">
+                                        ${PRODUCT_CATALOG.filter(p => p.category === 'ข้าวสาร').map(p => `<option value="${p.name}" ${item.product === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
+                                    </optgroup>
+                                    <optgroup label="ผลพลอยได้">
+                                        ${PRODUCT_CATALOG.filter(p => p.category === 'ผลพลอยได้').map(p => `<option value="${p.name}" ${item.product === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
+                                    </optgroup>
                                 </select>
                             </div>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">ลูกค้า</label>
-                            <input type="text" name="customer" value="${item?.customer || ''}" required 
-                                class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">สินค้า</label>
-                            <input type="text" name="product" value="${item?.product || ''}" required 
-                                class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all">
-                        </div>
-                        <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">จำนวน (กก.)</label>
-                                <input type="number" name="quantity" value="${item?.quantity || ''}" required 
-                                    class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all">
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ขนาดบรรจุ</label>
+                                <select onchange="onSOItemChange(${idx}, 'packSize', this.value)" class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
+                                    <option value="">-- กก. --</option>
+                                    ${sizes.map(s => `<option value="${s}" ${String(item.packSize) === String(s) ? 'selected' : ''}>${s} กก.</option>`).join('')}
+                                </select>
                             </div>
                             <div>
-                                <label class="block text-sm font-semibold mb-2 text-gray-700 dark:text-gray-300">ยอดเงิน (บาท)</label>
-                                <input type="number" name="amount" value="${item?.amount || ''}" required 
-                                    class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all">
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">จำนวน</label>
+                                <div class="flex gap-1">
+                                    <input type="number" value="${item.qty}" min="0" oninput="onSOItemChange(${idx}, 'qty', this.value)" placeholder="0"
+                                        class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
+                                </div>
+                                <span class="text-xs text-gray-400 mt-0.5 block">${item.unit}</span>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ราคา/หน่วย (฿)</label>
+                                <input type="number" value="${item.unitPrice}" min="0" oninput="onSOItemChange(${idx}, 'unitPrice', this.value)" placeholder="0"
+                                    class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">จำนวนเงิน</label>
+                                <div class="p-2.5 bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800 rounded-lg text-sm font-bold text-green-700 dark:text-green-400" id="so-item-amount-${idx}">
+                                    ${formatNumber(item.amount)}
+                                </div>
+                                <div class="text-xs text-blue-600 dark:text-blue-400 mt-0.5" id="so-item-weight-${idx}">
+                                    ${parseNum(item.packSize) > 0 && parseNum(item.qty) > 0 ? `${formatNumber(item.totalWeight)} กก.` : '-'}
+                                </div>
                             </div>
                         </div>
-                        <button type="submit" class="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all">
-                            ${icons.save} บันทึกข้อมูล
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // ===================== SO FORM =====================
+        function openSOForm(so = null) {
+            const editId = so?.id || '';
+            const isEdit = !!so;
+            const soNumber = so?.soNumber || generateSONumber();
+
+            // Initialize line items
+            if (so && so.items && so.items.length > 0) {
+                soLineItems = so.items.map(i => ({ ...i }));
+            } else {
+                soLineItems = [{ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
+            }
+
+            const subtotal = soLineItems.reduce((s, i) => s + parseNum(i.amount), 0);
+            const discount = so?.discount || 0;
+            const grandTotal = subtotal - discount;
+            const totalWeight = soLineItems.reduce((s, i) => s + (parseNum(i.qty) * parseNum(i.packSize)), 0);
+
+            const form = `
+                <form onsubmit="event.preventDefault(); handleSOSave('${editId}', '${soNumber}'); return false;" id="so-form">
+                    <div class="space-y-6">
+                        <!-- Section 1: Header -->
+                        <div class="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 p-5 rounded-2xl border-2 border-green-200 dark:border-green-800">
+                            <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                                <span>📋</span> ข้อมูลหลักเอกสาร
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">เลขที่ SO</label>
+                                    <div class="p-3 bg-white dark:bg-gray-800 border-2 border-green-300 dark:border-green-700 rounded-xl text-green-700 dark:text-green-400 font-bold text-lg text-center shadow-sm">
+                                        ${soNumber}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">วันที่สั่งซื้อ</label>
+                                    <input type="date" name="orderDate" value="${so?.orderDate || new Date().toISOString().split('T')[0]}" required
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ชื่อลูกค้า</label>
+                                    <input type="text" name="customerName" value="${so?.customerName || ''}" required placeholder="พิมพ์ชื่อลูกค้า..."
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">เลขที่อ้างอิง (PO ลูกค้า)</label>
+                                    <input type="text" name="customerRef" value="${so?.customerRef || ''}" placeholder="ถ้ามี..."
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section 2: Line Items -->
+                        <div class="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 p-5 rounded-2xl border-2 border-blue-200 dark:border-blue-800">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
+                                    <span>📦</span> รายการสินค้า
+                                </h3>
+                                <button type="button" onclick="addSOLineItem()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md hover:shadow-lg transition-all flex items-center gap-1">
+                                    <span class="text-lg">+</span> เพิ่มรายการ
+                                </button>
+                            </div>
+                            <div id="so-items-container" class="space-y-3">
+                            </div>
+                            <div class="mt-4 p-3 bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-700 flex justify-between items-center">
+                                <span class="text-sm font-semibold text-gray-600 dark:text-gray-400">📊 น้ำหนักรวมทั้งหมด:</span>
+                                <span class="text-lg font-bold text-blue-700 dark:text-blue-400" id="so-total-weight">${totalWeight > 0 ? `${formatNumber(totalWeight)} กก. (${(totalWeight / 1000).toFixed(2)} ตัน)` : '-'}</span>
+                            </div>
+                        </div>
+
+                        <!-- Section 3: Shipping -->
+                        <div class="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 p-5 rounded-2xl border-2 border-purple-200 dark:border-purple-800">
+                            <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                                <span>🚚</span> ข้อมูลการจัดส่ง
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">วันที่นัดส่ง</label>
+                                    <input type="date" name="deliveryDate" value="${so?.deliveryDate || ''}"
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">วิธีจัดส่ง</label>
+                                    <select name="deliveryMethod" class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                        <option value="">-- เลือก --</option>
+                                        ${DELIVERY_METHODS.map(m => `<option value="${m}" ${so?.deliveryMethod === m ? 'selected' : ''}>${m}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">เงื่อนไขค่าขนส่ง</label>
+                                    <select name="freightTerms" class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                        <option value="">-- เลือก --</option>
+                                        ${FREIGHT_TERMS.map(f => `<option value="${f}" ${so?.freightTerms === f ? 'selected' : ''}>${f}</option>`).join('')}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                                <div class="md:col-span-1">
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ทะเบียนรถ</label>
+                                    <input type="text" name="truckNo" value="${so?.truckNo || ''}" placeholder="เช่น กข-1234"
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                </div>
+                                <div class="md:col-span-1">
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ชื่อคนขับ</label>
+                                    <input type="text" name="driverName" value="${so?.driverName || ''}" placeholder="ชื่อ-สกุล"
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                </div>
+                                <div class="md:col-span-1">
+                                    <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">สถานที่จัดส่ง</label>
+                                    <input type="text" name="shippingAddress" value="${so?.shippingAddress || ''}" placeholder="ที่อยู่จัดส่ง..."
+                                        class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-purple-500 transition-all">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section 4: Summary & Terms -->
+                        <div class="bg-gradient-to-r from-amber-50 to-yellow-50 dark:from-amber-900/20 dark:to-yellow-900/20 p-5 rounded-2xl border-2 border-amber-200 dark:border-amber-800">
+                            <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-4 flex items-center gap-2">
+                                <span>💰</span> สรุปยอดและเงื่อนไข
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">เงื่อนไขชำระเงิน</label>
+                                        <select name="paymentTerms" class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-amber-500 transition-all">
+                                            ${PAYMENT_TERMS.map(pt => `<option value="${pt}" ${so?.paymentTerms === pt ? 'selected' : ''}>${pt}</option>`).join('')}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">สถานะ</label>
+                                        <select name="status" class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-amber-500 transition-all">
+                                            <option value="จัดเตรียมผลิต" ${so?.status === 'จัดเตรียมผลิต' || !so ? 'selected' : ''}>🏭 จัดเตรียมผลิต</option>
+                                            <option value="บรรจุแล้ว" ${so?.status === 'บรรจุแล้ว' ? 'selected' : ''}>📦 บรรจุแล้ว</option>
+                                            <option value="ส่งแล้ว" ${so?.status === 'ส่งแล้ว' ? 'selected' : ''}>🚚 ส่งแล้ว</option>
+                                            <option value="จ่ายเงินสำเร็จ" ${so?.status === 'จ่ายเงินสำเร็จ' ? 'selected' : ''}>💰 จ่ายเงินสำเร็จ</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">หมายเหตุภายใน (สั่งการถึงโกดัง)</label>
+                                        <textarea name="internalRemarks" rows="2" placeholder='เช่น "เน้นคัดสีพิเศษ", "ระวังความชื้น"...'
+                                            class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-amber-500 transition-all text-sm">${so?.internalRemarks || ''}</textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">หมายเหตุท้ายบิล (ลูกค้าเห็น)</label>
+                                        <textarea name="customerRemarks" rows="2" placeholder="ข้อความที่จะพิมพ์ลงบนใบส่งของ..."
+                                            class="w-full p-3 border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-amber-500 transition-all text-sm">${so?.customerRemarks || ''}</textarea>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="bg-white dark:bg-gray-800 rounded-xl p-5 border-2 border-amber-200 dark:border-amber-700 shadow-sm space-y-4">
+                                        <div class="flex justify-between items-center pb-3 border-b border-gray-200 dark:border-gray-700">
+                                            <span class="text-gray-600 dark:text-gray-400">ยอดรวม (Subtotal)</span>
+                                            <span class="text-xl font-bold text-gray-800 dark:text-white" id="so-subtotal">${formatCurrency(subtotal)}</span>
+                                        </div>
+                                        <div class="flex justify-between items-center gap-3">
+                                            <span class="text-gray-600 dark:text-gray-400">ส่วนลด</span>
+                                            <div class="w-40">
+                                                <input type="number" id="so-discount" name="discount" value="${discount}" min="0" oninput="recalcSOTotals()" placeholder="0"
+                                                    class="w-full p-2 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-amber-500 transition-all text-right text-sm">
+                                            </div>
+                                        </div>
+                                        <div class="flex justify-between items-center pt-3 border-t-2 border-amber-400 dark:border-amber-600">
+                                            <span class="text-lg font-bold text-gray-800 dark:text-white">ยอดสุทธิ (Grand Total)</span>
+                                            <span class="text-2xl font-bold text-green-600 dark:text-green-400" id="so-grandtotal">${formatCurrency(grandTotal)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit -->
+                        <button type="submit" class="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white py-4 rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2">
+                            ${icons.save} ${isEdit ? 'อัปเดตใบสั่งซื้อ' : 'บันทึกใบสั่งซื้อ'}
                         </button>
                     </div>
                 </form>
             `;
-            showModal(item ? '✏️ แก้ไขคำสั่งซื้อ' : '➕ เพิ่มคำสั่งซื้อใหม่', form);
+
+            // Use wider modal
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto';
+            modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+            modal.innerHTML = `
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-5xl my-4 overflow-hidden fade-in" onclick="event.stopPropagation()">
+                    <div class="px-6 py-4 border-b dark:border-gray-700 flex justify-between items-center bg-gradient-to-r from-green-50 to-emerald-50 dark:from-gray-900 dark:to-gray-800 sticky top-0 z-10">
+                        <div class="flex items-center gap-3">
+                            <span class="text-2xl">📝</span>
+                            <div>
+                                <h3 class="font-bold text-xl text-gray-800 dark:text-white">${isEdit ? 'แก้ไขใบสั่งซื้อ' : 'สร้างใบสั่งซื้อใหม่ (Sales Order)'}</h3>
+                                <p class="text-xs text-gray-500 dark:text-gray-400">${soNumber}</p>
+                            </div>
+                        </div>
+                        <button onclick="this.closest('.fixed').remove()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 bg-white dark:bg-gray-700 p-2 rounded-full shadow hover:shadow-lg transition-all">
+                            ${icons.close}
+                        </button>
+                    </div>
+                    <div class="p-6">${form}</div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // Render line items after modal is in DOM
+            setTimeout(() => {
+                rerenderSOItems();
+                recalcSOTotals();
+            }, 50);
         }
 
-        window.handleOrderSave = async function (form, editId = '') {
-            const orderData = {
-                date: form.date.value,
-                customer: form.customer.value,
-                product: form.product.value,
-                quantity: parseNum(form.quantity.value),
-                amount: parseNum(form.amount.value),
+        // ===================== SO SAVE HANDLER =====================
+        window.handleSOSave = async function (editId, soNumber) {
+            const form = document.getElementById('so-form');
+            if (!form) return;
+
+            // Validate at least one line item has product
+            const validItems = soLineItems.filter(i => i.product);
+            if (validItems.length === 0) {
+                showToast('กรุณาเลือกสินค้าอย่างน้อย 1 รายการ', 'error');
+                return;
+            }
+
+            const subtotal = validItems.reduce((s, i) => s + (parseNum(i.qty) * parseNum(i.unitPrice)), 0);
+            const discount = parseNum(form.discount.value);
+
+            const soData = {
+                soNumber: soNumber,
+                orderDate: form.orderDate.value,
+                customerName: form.customerName.value,
+                customerRef: form.customerRef.value,
+                items: validItems.map(i => ({
+                    product: i.product,
+                    packSize: parseNum(i.packSize),
+                    qty: parseNum(i.qty),
+                    unit: i.unit,
+                    unitPrice: parseNum(i.unitPrice),
+                    amount: parseNum(i.qty) * parseNum(i.unitPrice),
+                    totalWeight: parseNum(i.qty) * parseNum(i.packSize)
+                })),
+                deliveryDate: form.deliveryDate.value,
+                shippingAddress: form.shippingAddress.value,
+                deliveryMethod: form.deliveryMethod.value,
+                truckNo: form.truckNo.value,
+                driverName: form.driverName.value,
+                freightTerms: form.freightTerms.value,
+                paymentTerms: form.paymentTerms.value,
+                subtotal: subtotal,
+                discount: discount,
+                grandTotal: subtotal - discount,
+                internalRemarks: form.internalRemarks.value,
+                customerRemarks: form.customerRemarks.value,
                 status: form.status.value
             };
 
-            // Close modal immediately for better UX
+            // Close modal
             document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
             try {
                 if (editId) {
-                    // Edit existing order
-                    const index = mockData.orders.findIndex(o => o.id === editId);
+                    const index = mockData.salesOrders.findIndex(o => o.id === editId);
                     if (index !== -1) {
-                        mockData.orders[index] = {
-                            ...mockData.orders[index],
-                            ...orderData
-                        };
-                        await saveToFirestore('orders', mockData.orders[index]);
+                        mockData.salesOrders[index] = { ...mockData.salesOrders[index], ...soData };
+                        await saveToFirestore('salesOrders', mockData.salesOrders[index]);
                     }
                 } else {
-                    // Add new order
-                    const newOrder = {
-                        ...orderData,
+                    const newSO = {
+                        ...soData,
                         id: 'temp_' + Date.now().toString(),
-                        displayId: `#ORD-${Math.floor(Math.random() * 9000) + 1000}`
+                        createdAt: new Date().toISOString()
                     };
-                    const newId = await saveToFirestore('orders', newOrder);
-                    newOrder.id = newId;
-                    mockData.orders.unshift(newOrder);
+                    const newId = await saveToFirestore('salesOrders', newSO);
+                    newSO.id = newId;
+                    mockData.salesOrders.unshift(newSO);
                 }
 
-                showToast('บันทึกสำเร็จ!');
+                saveToCache();
+                showToast('บันทึกใบสั่งซื้อสำเร็จ!');
                 render();
             } catch (error) {
                 showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
             }
         };
 
+        window.editSO = function (id) {
+            const so = mockData.salesOrders.find(o => o.id === id);
+            if (so) openSOForm(so);
+        };
+
+        window.deleteSO = async function (id) {
+            if (confirm('ยืนยันการลบใบสั่งซื้อนี้?')) {
+                try {
+                    await deleteFromFirestore('salesOrders', id);
+                    mockData.salesOrders = mockData.salesOrders.filter(o => o.id !== id);
+                    saveToCache();
+                    showToast('ลบใบสั่งซื้อสำเร็จ!');
+                    render();
+                } catch (error) {
+                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
+                }
+            }
+        };
+
+        window.printSO = function (id) {
+            const so = mockData.salesOrders.find(o => o.id === id);
+            if (!so) return;
+
+            const totalWeight = (so.items || []).reduce((s, i) => s + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+
+            const printWindow = window.open('', '_blank', 'width=800,height=900');
+            printWindow.document.write(`
+                <!DOCTYPE html>
+                <html lang="th">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>ใบสั่งซื้อ ${so.soNumber}</title>
+                    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+                    <style>
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        body { font-family: 'Sarabun', sans-serif; padding: 30px; color: #333; font-size: 14px; }
+                        .header { text-align: center; border-bottom: 3px solid #16a34a; padding-bottom: 15px; margin-bottom: 20px; }
+                        .header h1 { font-size: 22px; color: #16a34a; margin-bottom: 4px; }
+                        .header .company { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
+                        .header .subtitle { font-size: 12px; color: #888; }
+                        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; padding: 12px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; }
+                        .info-item { font-size: 13px; }
+                        .info-item .label { font-weight: 600; color: #666; font-size: 11px; }
+                        .info-item .value { font-weight: 600; color: #111; }
+                        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+                        th { background: #16a34a; color: white; padding: 10px 8px; font-size: 12px; text-align: left; }
+                        td { padding: 8px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
+                        tr:nth-child(even) { background: #f9fafb; }
+                        .summary { display: flex; justify-content: flex-end; margin-bottom: 20px; }
+                        .summary-box { width: 280px; border: 2px solid #16a34a; border-radius: 8px; overflow: hidden; }
+                        .summary-row { display: flex; justify-content: space-between; padding: 8px 14px; font-size: 13px; }
+                        .summary-row.total { background: #16a34a; color: white; font-size: 16px; font-weight: 700; }
+                        .section-title { font-weight: 700; font-size: 14px; margin-bottom: 8px; padding: 4px 0; border-bottom: 1px solid #ddd; color: #333; }
+                        .shipping-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+                        .remarks { margin-bottom: 15px; padding: 10px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px; font-size: 13px; }
+                        .footer { text-align: center; margin-top: 30px; padding-top: 15px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #aaa; }
+                        .signature-area { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 50px; }
+                        .signature-box { text-align: center; }
+                        .signature-line { border-bottom: 1px solid #333; margin-bottom: 5px; height: 40px; }
+                        .signature-label { font-size: 12px; color: #666; }
+                        @media print { body { padding: 15px; } }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <div class="company">กมลค้าข้าว</div>
+                        <h1>ใบสั่งซื้อ (Sales Order)</h1>
+                        <div class="subtitle">Kamol Rice ERP</div>
+                    </div>
+
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="label">เลขที่ SO</div>
+                            <div class="value" style="color: #16a34a; font-size: 16px;">${so.soNumber}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="label">วันที่สั่งซื้อ</div>
+                            <div class="value">${formatDate(so.orderDate)}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="label">ลูกค้า</div>
+                            <div class="value">${so.customerName || '-'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="label">เลขที่อ้างอิง (PO)</div>
+                            <div class="value">${so.customerRef || '-'}</div>
+                        </div>
+                    </div>
+
+                    <div class="section-title">📦 รายการสินค้า</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>สินค้า</th>
+                                <th style="text-align:center">ขนาดบรรจุ</th>
+                                <th style="text-align:center">จำนวน</th>
+                                <th style="text-align:right">ราคา/หน่วย</th>
+                                <th style="text-align:right">น้ำหนัก</th>
+                                <th style="text-align:right">จำนวนเงิน</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${(so.items || []).map((item, idx) => `
+                                <tr>
+                                    <td>${idx + 1}</td>
+                                    <td>${item.product}</td>
+                                    <td style="text-align:center">${item.packSize} กก.</td>
+                                    <td style="text-align:center">${formatNumber(item.qty)} ${item.unit || 'กระสอบ'}</td>
+                                    <td style="text-align:right">${formatCurrency(item.unitPrice)}</td>
+                                    <td style="text-align:right">${formatNumber(item.totalWeight || (item.qty * item.packSize))} กก.</td>
+                                    <td style="text-align:right; font-weight:600">${formatCurrency(item.amount)}</td>
+                                </tr>
+                            `).join('')}
+                            <tr style="background:#f0fdf4">
+                                <td colspan="3" style="font-weight:600">รวมทั้งหมด</td>
+                                <td style="text-align:center; font-weight:600">${formatNumber((so.items || []).reduce((s, i) => s + parseNum(i.qty), 0))} กระสอบ</td>
+                                <td></td>
+                                <td style="text-align:right; font-weight:600">${formatNumber(totalWeight)} กก.</td>
+                                <td></td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="summary">
+                        <div class="summary-box">
+                            <div class="summary-row" style="border-bottom:1px solid #e5e7eb">
+                                <span>ยอดรวม (Subtotal)</span>
+                                <span>${formatCurrency(so.subtotal || 0)}</span>
+                            </div>
+                            ${parseNum(so.discount) > 0 ? `
+                                <div class="summary-row" style="border-bottom:1px solid #e5e7eb">
+                                    <span>ส่วนลด</span>
+                                    <span style="color:red">-${formatCurrency(so.discount)}</span>
+                                </div>
+                            ` : ''}
+                            <div class="summary-row total">
+                                <span>ยอดสุทธิ (Grand Total)</span>
+                                <span>${formatCurrency(so.grandTotal || 0)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    ${so.deliveryDate || so.deliveryMethod || so.shippingAddress || so.truckNo ? `
+                        <div class="section-title">🚚 ข้อมูลการจัดส่ง</div>
+                        <div class="shipping-grid">
+                            <div class="info-item"><div class="label">วันที่นัดส่ง</div><div class="value">${so.deliveryDate ? formatDate(so.deliveryDate) : '-'}</div></div>
+                            <div class="info-item"><div class="label">วิธีจัดส่ง</div><div class="value">${so.deliveryMethod || '-'}</div></div>
+                            <div class="info-item"><div class="label">เงื่อนไขค่าขนส่ง</div><div class="value">${so.freightTerms || '-'}</div></div>
+                            <div class="info-item"><div class="label">ทะเบียนรถ</div><div class="value">${so.truckNo || '-'}</div></div>
+                            <div class="info-item"><div class="label">ชื่อคนขับ</div><div class="value">${so.driverName || '-'}</div></div>
+                            <div class="info-item"><div class="label">สถานที่จัดส่ง</div><div class="value">${so.shippingAddress || '-'}</div></div>
+                        </div>
+                    ` : ''}
+
+                    <div class="info-item" style="margin-bottom:10px">
+                        <div class="label">เงื่อนไขชำระเงิน</div>
+                        <div class="value">${so.paymentTerms || '-'}</div>
+                    </div>
+
+                    ${so.customerRemarks ? `
+                        <div class="remarks">
+                            <strong>หมายเหตุ:</strong> ${so.customerRemarks}
+                        </div>
+                    ` : ''}
+
+                    <div class="signature-area">
+                        <div class="signature-box">
+                            <div class="signature-line"></div>
+                            <div class="signature-label">ผู้สั่งซื้อ / ลูกค้า</div>
+                            <div class="signature-label">วันที่ ........./........./.........</div>
+                        </div>
+                        <div class="signature-box">
+                            <div class="signature-line"></div>
+                            <div class="signature-label">ผู้อนุมัติ / โรงสี</div>
+                            <div class="signature-label">วันที่ ........./........./.........</div>
+                        </div>
+                    </div>
+
+                    <div class="footer">
+                        พิมพ์จากระบบ Kamol Rice ERP &bull; ${new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+            printWindow.onload = () => printWindow.print();
+        };
+
+        // Keep old editOrder for backward compat
         window.editOrder = function (id) {
             const order = mockData.orders.find(o => o.id === id);
             if (order) {
-                openOrderForm(order);
+                // no-op for old orders
             }
         };
 
@@ -777,70 +1308,156 @@
             `;
         }
 
+        window.setSOFilter = function (status) { soFilter = status; render(); };
+        window.setSOSort = function (val) { soSort = val; render(); };
+
         function renderOrders() {
+            const allSO = mockData.salesOrders;
+
+            const STATUS_CONFIG = {
+                'จัดเตรียมผลิต': { color: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400', icon: '🏭', border: 'border-l-amber-500' },
+                'บรรจุแล้ว': { color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400', icon: '📦', border: 'border-l-blue-500' },
+                'ส่งแล้ว': { color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400', icon: '🚚', border: 'border-l-purple-500' },
+                'จ่ายเงินสำเร็จ': { color: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400', icon: '💰', border: 'border-l-green-500' }
+            };
+
+            const statuses = ['ทั้งหมด', ...Object.keys(STATUS_CONFIG)];
+
+            // Count per status
+            const statusCounts = {};
+            statuses.forEach(s => { statusCounts[s] = s === 'ทั้งหมด' ? allSO.length : allSO.filter(o => o.status === s).length; });
+
+            // Filter
+            let filtered = soFilter === 'ทั้งหมด' ? [...allSO] : allSO.filter(o => o.status === soFilter);
+
+            // Sort
+            const [sortField, sortDir] = soSort.split('-');
+            filtered.sort((a, b) => {
+                const va = a[sortField] || '';
+                const vb = b[sortField] || '';
+                return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+
+            // Filter tab colors
+            const filterColors = {
+                'ทั้งหมด': { active: 'bg-gray-800 text-white dark:bg-white dark:text-gray-800', inactive: 'bg-white text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700' },
+                'จัดเตรียมผลิต': { active: 'bg-amber-500 text-white', inactive: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40' },
+                'บรรจุแล้ว': { active: 'bg-blue-500 text-white', inactive: 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40' },
+                'ส่งแล้ว': { active: 'bg-purple-500 text-white', inactive: 'bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/40' },
+                'จ่ายเงินสำเร็จ': { active: 'bg-green-500 text-white', inactive: 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40' }
+            };
+
+            const filterIcons = { 'ทั้งหมด': '📋', 'จัดเตรียมผลิต': '🏭', 'บรรจุแล้ว': '📦', 'ส่งแล้ว': '🚚', 'จ่ายเงินสำเร็จ': '💰' };
+
             return `
-                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden fade-in">
-                    <div class="overflow-x-auto">
-                        <table class="w-full">
-                            <thead class="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 border-b-2 border-gray-200 dark:border-gray-700">
-                                <tr>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">เลขที่</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">วันที่</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">ลูกค้า</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">สินค้า</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">จำนวน</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">ยอดเงิน</th>
-                                    <th class="px-6 py-4 text-left text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">สถานะ</th>
-                                    <th class="px-6 py-4 text-right text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">จัดการ</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-                                ${mockData.orders.length === 0 ? `
-                                    <tr><td colspan="8" class="px-6 py-12 text-center text-gray-400 dark:text-gray-600">
-                                        <div class="flex flex-col items-center gap-3">
-                                            <span class="text-5xl opacity-50">${icons.orders}</span>
-                                            <p class="text-lg font-medium">ยังไม่มีคำสั่งซื้อ</p>
-                                        </div>
-                                    </td></tr>
-                                ` : mockData.orders.map(order => `
-                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all">
-                                        <td class="px-6 py-4">
-                                            <span class="font-bold text-green-600 dark:text-green-400">${order.displayId}</span>
-                                        </td>
-                                        <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">${formatDate(order.date)}</td>
-                                        <td class="px-6 py-4">
-                                            <span class="font-medium text-gray-800 dark:text-white">${order.customer}</span>
-                                        </td>
-                                        <td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">${order.product}</td>
-                                        <td class="px-6 py-4 text-sm font-medium text-gray-700 dark:text-gray-300">${formatNumber(parseNum(order.quantity))} กก.</td>
-                                        <td class="px-6 py-4">
-                                            <span class="font-bold text-lg text-gray-800 dark:text-white">${formatCurrency(parseNum(order.amount))}</span>
-                                        </td>
-                                        <td class="px-6 py-4">
-                                            <span class="px-3 py-1.5 rounded-full text-xs font-semibold ${order.status === 'สำเร็จ' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
-                    order.status === 'กำลังส่ง' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
-                        'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
-                }">
-                                                ${order.status}
-                                            </span>
-                                        </td>
-                                        <td class="px-6 py-4 text-right">
-                                            <div class="flex items-center justify-end gap-2">
-                                                <button onclick="editOrder('${order.id}')" 
-                                                    class="p-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all" title="แก้ไข">
-                                                    ${icons.edit}
-                                                </button>
-                                                <button onclick="deleteOrder('${order.id}')" 
-                                                    class="p-2 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all" title="ลบ">
-                                                    ${icons.delete}
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
+                <div class="space-y-4 fade-in">
+                    <!-- Filter & Sort Toolbar -->
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-4">
+                        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                            <!-- Status Filter Tabs -->
+                            <div class="flex flex-wrap gap-2">
+                                ${statuses.map(s => {
+                const isActive = soFilter === s;
+                const colors = filterColors[s];
+                const cls = isActive ? colors.active : colors.inactive;
+                return `
+                                        <button onclick="setSOFilter('${s}')" 
+                                            class="px-3 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 border border-transparent ${cls} ${isActive ? 'shadow-md scale-105' : 'shadow-sm'}">
+                                            <span>${filterIcons[s]}</span>
+                                            <span class="hidden sm:inline">${s}</span>
+                                            <span class="ml-1 px-1.5 py-0.5 rounded-full text-xs ${isActive ? 'bg-white/30' : 'bg-gray-200/60 dark:bg-gray-600/40'}">${statusCounts[s]}</span>
+                                        </button>
+                                    `;
+            }).join('')}
+                            </div>
+                            <!-- Sort Control -->
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">เรียงตาม:</span>
+                                <select onchange="setSOSort(this.value)" class="px-3 py-2 text-sm border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all cursor-pointer">
+                                    <option value="orderDate-desc" ${soSort === 'orderDate-desc' ? 'selected' : ''}>📅 วันสั่ง (ล่าสุด)</option>
+                                    <option value="orderDate-asc" ${soSort === 'orderDate-asc' ? 'selected' : ''}>📅 วันสั่ง (เก่าสุด)</option>
+                                    <option value="deliveryDate-desc" ${soSort === 'deliveryDate-desc' ? 'selected' : ''}>🚚 วันส่ง (ล่าสุด)</option>
+                                    <option value="deliveryDate-asc" ${soSort === 'deliveryDate-asc' ? 'selected' : ''}>🚚 วันส่ง (เก่าสุด)</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
+
+                    <!-- Results Count -->
+                    <div class="flex items-center justify-between px-1">
+                        <p class="text-sm text-gray-500 dark:text-gray-400">
+                            แสดง <span class="font-bold text-gray-800 dark:text-white">${filtered.length}</span> รายการ
+                            ${soFilter !== 'ทั้งหมด' ? `<span class="text-xs">(กรอง: ${soFilter})</span>` : `<span class="text-xs">(ทั้งหมด ${allSO.length} รายการ)</span>`}
+                        </p>
+                    </div>
+
+                    <!-- SO Cards -->
+                    ${filtered.length === 0 ? `
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                            <div class="flex flex-col items-center gap-4">
+                                <span class="text-6xl opacity-40">${soFilter === 'ทั้งหมด' ? '📝' : filterIcons[soFilter]}</span>
+                                <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
+                                    ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ (Sales Order)' : `ไม่มีรายการสถานะ "${soFilter}"`}
+                                </p>
+                                <p class="text-sm text-gray-400 dark:text-gray-500">
+                                    ${allSO.length === 0 ? 'กดปุ่ม "สร้างใบสั่งซื้อ" ด้านบนเพื่อเริ่มต้น' : 'ลองเปลี่ยนตัวกรองสถานะ'}
+                                </p>
+                            </div>
+                        </div>
+                    ` : filtered.map(so => {
+                const cfg = STATUS_CONFIG[so.status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                const itemsSummary = (so.items || []).map(i => i.product).join(', ');
+                const totalWeight = (so.items || []).reduce((s, i) => s + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+
+                return `
+                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden hover:shadow-xl transition-all card-hover border-l-4 ${cfg.border}">
+                                <div class="p-5">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                                        <div class="flex items-center gap-3">
+                                            <span class="text-lg font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-lg">${so.soNumber}</span>
+                                            <span class="px-3 py-1.5 rounded-full text-xs font-semibold ${cfg.color}">${cfg.icon} ${so.status}</span>
+                                            ${so.customerRef ? `<span class="text-xs text-gray-400 dark:text-gray-500">PO: ${so.customerRef}</span>` : ''}
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <button onclick="printSO('${so.id}')" class="px-3 py-2 text-green-600 hover:text-green-800 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                                🖨️ พิมพ์
+                                            </button>
+                                            <button onclick="editSO('${so.id}')" class="px-3 py-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                                ${icons.edit} แก้ไข
+                                            </button>
+                                            <button onclick="deleteSO('${so.id}')" class="px-3 py-2 text-red-600 hover:text-red-800 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                                ${icons.delete} ลบ
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div>
+                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ลูกค้า</p>
+                                            <p class="font-semibold text-gray-800 dark:text-white">${so.customerName || '-'}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">สินค้า (${(so.items || []).length} รายการ)</p>
+                                            <p class="text-sm text-gray-700 dark:text-gray-300 truncate" title="${itemsSummary}">${itemsSummary || '-'}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">น้ำหนักรวม</p>
+                                            <p class="text-sm font-medium text-blue-600 dark:text-blue-400">${totalWeight > 0 ? `${formatNumber(totalWeight)} กก.` : '-'}</p>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ยอดสุทธิ</p>
+                                            <p class="text-xl font-bold text-green-600 dark:text-green-400">${formatCurrency(parseNum(so.grandTotal))}</p>
+                                        </div>
+                                    </div>
+                                    <div class="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                                        <span>📅 สั่ง: ${formatDate(so.orderDate)}</span>
+                                        ${so.deliveryDate ? `<span>🚚 ส่ง: ${formatDate(so.deliveryDate)}</span>` : ''}
+                                        ${so.deliveryMethod ? `<span>📦 ${so.deliveryMethod}</span>` : ''}
+                                        ${so.paymentTerms ? `<span>💳 ${so.paymentTerms}</span>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+            }).join('')}
                 </div>
             `;
         }
@@ -1244,10 +1861,10 @@
                                     <span class="text-2xl">${darkMode ? icons.sun : icons.moon}</span>
                                 </button>
                                 ${currentMenu === 'orders' ? `
-                                    <button onclick="openOrderForm()" 
+                                    <button onclick="openSOForm()" 
                                         class="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
                                         <span class="text-lg">${icons.plus}</span>
-                                        <span class="hidden sm:inline">เพิ่มรายการ</span>
+                                        <span class="hidden sm:inline">สร้างใบสั่งซื้อ (SO)</span>
                                     </button>
                                 ` : ''}
                             </div>
