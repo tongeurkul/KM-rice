@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ระบบบริหารจัดการโรงสีข้าว - Kamol Rice ERP (Demo)</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -49,6 +50,138 @@
         .card-hover:hover {
             transform: translateY(-4px);
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .kanban-scroll::-webkit-scrollbar {
+            height: 8px;
+        }
+
+        .kanban-scroll::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 4px;
+        }
+
+        .kanban-scroll::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 4px;
+        }
+
+        .kanban-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 0, 0, 0.25);
+        }
+
+        .dark .kanban-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .dark .kanban-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .dark .kanban-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        .kanban-card[draggable="true"] {
+            cursor: grab;
+        }
+
+        .kanban-card[draggable="true"]:active {
+            cursor: grabbing;
+        }
+
+        .kanban-card.dragging {
+            opacity: 0.4;
+            transform: scale(0.97);
+            box-shadow: 0 0 0 2px #16a34a;
+        }
+
+        .kanban-drop-indicator {
+            height: 4px;
+            background: linear-gradient(90deg, #16a34a, #059669);
+            border-radius: 4px;
+            margin: 4px 0;
+            transition: opacity 0.15s;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .kanban-drop-indicator.active {
+            opacity: 1;
+        }
+
+        .inv-card[draggable="true"] {
+            cursor: grab;
+        }
+
+        .inv-card[draggable="true"]:active {
+            cursor: grabbing;
+        }
+
+        .inv-card.dragging {
+            opacity: 0.35;
+            transform: scale(0.95);
+            box-shadow: 0 0 0 2px #2563eb;
+        }
+
+        .inv-drop-indicator {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #2563eb, #7c3aed);
+            border-radius: 4px;
+            transition: opacity 0.15s;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .inv-drop-indicator.active {
+            opacity: 1;
+        }
+
+        .inv-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        @media (min-width: 768px) {
+            .inv-grid-3 {
+                grid-template-columns: repeat(3, 1fr);
+            }
+
+            .inv-grid-4 {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        .inv-card {
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .inv-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .stock-bar {
+            height: 6px;
+            border-radius: 3px;
+            background: #e5e7eb;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .dark .stock-bar {
+            background: #374151;
+        }
+
+        .stock-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s ease;
         }
     </style>
 </head>
@@ -125,7 +258,7 @@
                 for (const collName of collections) {
                     const snapshot = await db.collection(collName).get();
                     if (!snapshot.empty) {
-                        const firestoreData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        const firestoreData = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
                         // For silos: replace entirely with Firestore data
                         if (collName === 'silos') {
                             mockData.silos = firestoreData;
@@ -181,12 +314,18 @@
                 } else {
                     const docRef = await db.collection(collection).add(data);
                     data.id = docRef.id;
+                    // Update the document with the correct id field to prevent duplicates on reload
+                    await docRef.update({ id: docRef.id });
                 }
                 console.log(`✅ Saved to ${collection}:`, data.id);
                 return data.id;
             } catch (error) {
-                console.error(`❌ Error saving to ${collection}:`, error);
-                throw error;
+                console.warn(`⚠️ Firebase save failed for ${collection}, falling back to local storage:`, error.message || error);
+                // Generate a local ID if needed
+                if (!data.id || data.id.startsWith('temp_')) {
+                    data.id = 'local_' + Date.now().toString() + '_' + Math.random().toString(36).substr(2, 5);
+                }
+                return data.id;
             }
         }
 
@@ -195,8 +334,7 @@
                 await db.collection(collection).doc(id).delete();
                 console.log(`✅ Deleted from ${collection}:`, id);
             } catch (error) {
-                console.error(`❌ Error deleting from ${collection}:`, error);
-                throw error;
+                console.warn(`⚠️ Firebase delete failed for ${collection}, continuing with local delete:`, error.message || error);
             }
         }
 
@@ -269,6 +407,11 @@
         let mobileMenuOpen = false;
         let soFilter = 'ทั้งหมด';
         let soSort = 'orderDate-desc';
+        let soViewMode = 'list';
+        // Custom sort order for kanban columns { 'dateKey': ['soId1', 'soId2', ...] }
+        let kanbanSortOrder = JSON.parse(localStorage.getItem('kanbanSortOrder') || '{}');
+        // Custom sort order for inventory zones { 'zoneName': ['itemId1', 'itemId2', ...] }
+        let inventorySortOrder = JSON.parse(localStorage.getItem('inventorySortOrder') || '{}');
 
         // ===================== ICONS =====================
         const icons = {
@@ -280,19 +423,21 @@
             truck: '🚚', factory: '🏭', archive: '📁', so: '📝'
         };
 
-        // ===================== PRODUCT CATALOG =====================
-        const PRODUCT_CATALOG = [
-            { name: 'ข้าวเหนียวใหม่ ตราปลาวาฬ', category: 'ข้าวสาร', sizes: [15, 40, 48] },
-            { name: 'ข้าวเหนียวเก่า ตราไผ่ทอง', category: 'ข้าวสาร', sizes: [15, 40, 48] },
-            { name: 'ข้าวเหนียว ตราปลาสิงห์โต', category: 'ข้าวสาร', sizes: [15, 40, 48] },
-            { name: 'ข้าวเหนียว ตราไก่ไทย', category: 'ข้าวสาร', sizes: [15, 40, 48] },
-            { name: 'ข้าวหอมมะลิใหม่', category: 'ข้าวสาร', sizes: [5, 15, 48] },
-            { name: 'ข้าวหอมมะลิ Premium', category: 'ข้าวสาร', sizes: [5, 15, 48] },
-            { name: 'ข้าวปทุมธานี', category: 'ข้าวสาร', sizes: [5, 15, 48] },
-            { name: 'ข้าวสังข์หยด', category: 'ข้าวสาร', sizes: [5, 15] },
-            { name: 'ปลายข้าว', category: 'ผลพลอยได้', sizes: [25, 50] },
-            { name: 'รำอ่อน', category: 'ผลพลอยได้', sizes: [25, 30] },
-            { name: 'แกลบ', category: 'ผลพลอยได้', sizes: [30, 50] },
+        // ===================== PRODUCT & BRAND CATALOG =====================
+        const PRODUCTS = [
+            'ข้าวเหนียวใหม่',
+            'ข้าวเหนียวเก่า',
+            'มะลิใหม่',
+            'มะลิเก่า',
+            'มะลิ B'
+        ];
+        const BRANDS = [
+            'ตราปลาวาฬ',
+            'ตราปลาสิงห์โต',
+            'ตราไผ่ทอง',
+            'ไก่ไทย',
+            'ถุงขาว',
+            'อื่นๆ'
         ];
 
         const DELIVERY_METHODS = ['รถโรงสีไปส่ง', 'รถร่วม/รถรับจ้าง', 'ลูกค้ามารับเอง (FOB)'];
@@ -366,10 +511,10 @@
         }
 
         // ===================== SO LINE ITEMS STATE =====================
-        let soLineItems = [{ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
+        let soLineItems = [{ product: '', brand: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
 
         function addSOLineItem() {
-            soLineItems.push({ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 });
+            soLineItems.push({ product: '', brand: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 });
             rerenderSOItems();
         }
 
@@ -382,10 +527,6 @@
 
         function onSOItemChange(idx, field, value) {
             soLineItems[idx][field] = value;
-            if (field === 'product') {
-                // reset pack size when product changes
-                soLineItems[idx].packSize = '';
-            }
             // Recalc this row
             const item = soLineItems[idx];
             const qty = parseNum(item.qty);
@@ -394,7 +535,7 @@
             item.amount = qty * price;
             item.totalWeight = qty * pack;
 
-            if (field === 'product') {
+            if (field === 'product' || field === 'brand') {
                 rerenderSOItems();
             } else {
                 // Update just the computed fields for this row
@@ -422,41 +563,37 @@
             if (totalWeightEl) totalWeightEl.textContent = totalWeight > 0 ? `${formatNumber(totalWeight)} กก. (${(totalWeight / 1000).toFixed(2)} ตัน)` : '-';
         }
 
-        function getSOItemSizes(productName) {
-            const p = PRODUCT_CATALOG.find(c => c.name === productName);
-            return p ? p.sizes : [];
-        }
+        // getSOItemSizes removed — pack size is now free-text input
 
         function rerenderSOItems() {
             const container = document.getElementById('so-items-container');
             if (!container) return;
             container.innerHTML = soLineItems.map((item, idx) => {
-                const sizes = getSOItemSizes(item.product);
                 return `
                     <div class="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 border border-gray-200 dark:border-gray-700 fade-in">
                         <div class="flex justify-between items-center mb-3">
                             <span class="text-xs font-bold text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 px-2 py-1 rounded-lg">#${idx + 1}</span>
                             ${soLineItems.length > 1 ? `<button type="button" onclick="removeSOLineItem(${idx})" class="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 p-1.5 rounded-lg transition-all text-sm" title="ลบรายการ">🗑️</button>` : ''}
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-6 gap-3">
-                            <div class="md:col-span-2">
+                        <div class="grid grid-cols-1 md:grid-cols-7 gap-3">
+                            <div>
                                 <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">สินค้า</label>
                                 <select onchange="onSOItemChange(${idx}, 'product', this.value)" class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
                                     <option value="">-- เลือกสินค้า --</option>
-                                    <optgroup label="ข้าวสาร">
-                                        ${PRODUCT_CATALOG.filter(p => p.category === 'ข้าวสาร').map(p => `<option value="${p.name}" ${item.product === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
-                                    </optgroup>
-                                    <optgroup label="ผลพลอยได้">
-                                        ${PRODUCT_CATALOG.filter(p => p.category === 'ผลพลอยได้').map(p => `<option value="${p.name}" ${item.product === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
-                                    </optgroup>
+                                    ${PRODUCTS.map(p => `<option value="${p}" ${item.product === p ? 'selected' : ''}>${p}</option>`).join('')}
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ขนาดบรรจุ</label>
-                                <select onchange="onSOItemChange(${idx}, 'packSize', this.value)" class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
-                                    <option value="">-- กก. --</option>
-                                    ${sizes.map(s => `<option value="${s}" ${String(item.packSize) === String(s) ? 'selected' : ''}>${s} กก.</option>`).join('')}
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">แบรนด์</label>
+                                <select onchange="onSOItemChange(${idx}, 'brand', this.value)" class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
+                                    <option value="">-- เลือกแบรนด์ --</option>
+                                    ${BRANDS.map(b => `<option value="${b}" ${item.brand === b ? 'selected' : ''}>${b}</option>`).join('')}
                                 </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">ขนาดบรรจุ (กก.)</label>
+                                <input type="number" value="${item.packSize}" min="0" step="any" oninput="onSOItemChange(${idx}, 'packSize', this.value)" placeholder="เช่น 15, 48"
+                                    class="w-full p-2.5 border-2 border-gray-200 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all text-sm">
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold mb-1 text-gray-600 dark:text-gray-400">จำนวน</label>
@@ -496,7 +633,7 @@
             if (so && so.items && so.items.length > 0) {
                 soLineItems = so.items.map(i => ({ ...i }));
             } else {
-                soLineItems = [{ product: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
+                soLineItems = [{ product: '', brand: '', packSize: '', qty: '', unit: 'กระสอบ', unitPrice: '', amount: 0, totalWeight: 0 }];
             }
 
             const subtotal = soLineItems.reduce((s, i) => s + parseNum(i.amount), 0);
@@ -715,6 +852,7 @@
                 customerRef: form.customerRef.value,
                 items: validItems.map(i => ({
                     product: i.product,
+                    brand: i.brand || '',
                     packSize: parseNum(i.packSize),
                     qty: parseNum(i.qty),
                     unit: i.unit,
@@ -734,36 +872,33 @@
                 grandTotal: subtotal - discount,
                 internalRemarks: form.internalRemarks.value,
                 customerRemarks: form.customerRemarks.value,
-                status: form.status.value
+                status: form.status.value,
+                paidAmount: editId ? (mockData.salesOrders.find(o => o.id === editId)?.paidAmount || 0) : 0
             };
 
             // Close modal
             document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
-            try {
-                if (editId) {
-                    const index = mockData.salesOrders.findIndex(o => o.id === editId);
-                    if (index !== -1) {
-                        mockData.salesOrders[index] = { ...mockData.salesOrders[index], ...soData };
-                        await saveToFirestore('salesOrders', mockData.salesOrders[index]);
-                    }
-                } else {
-                    const newSO = {
-                        ...soData,
-                        id: 'temp_' + Date.now().toString(),
-                        createdAt: new Date().toISOString()
-                    };
-                    const newId = await saveToFirestore('salesOrders', newSO);
-                    newSO.id = newId;
-                    mockData.salesOrders.unshift(newSO);
+            if (editId) {
+                const index = mockData.salesOrders.findIndex(o => o.id === editId);
+                if (index !== -1) {
+                    mockData.salesOrders[index] = { ...mockData.salesOrders[index], ...soData };
+                    await saveToFirestore('salesOrders', mockData.salesOrders[index]);
                 }
-
-                saveToCache();
-                showToast('บันทึกใบสั่งซื้อสำเร็จ!');
-                render();
-            } catch (error) {
-                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
+            } else {
+                const newSO = {
+                    ...soData,
+                    id: 'temp_' + Date.now().toString(),
+                    createdAt: new Date().toISOString()
+                };
+                const newId = await saveToFirestore('salesOrders', newSO);
+                newSO.id = newId;
+                mockData.salesOrders.unshift(newSO);
             }
+
+            saveToCache();
+            showToast('บันทึกใบสั่งซื้อสำเร็จ!');
+            render();
         };
 
         window.editSO = function (id) {
@@ -773,15 +908,11 @@
 
         window.deleteSO = async function (id) {
             if (confirm('ยืนยันการลบใบสั่งซื้อนี้?')) {
-                try {
-                    await deleteFromFirestore('salesOrders', id);
-                    mockData.salesOrders = mockData.salesOrders.filter(o => o.id !== id);
-                    saveToCache();
-                    showToast('ลบใบสั่งซื้อสำเร็จ!');
-                    render();
-                } catch (error) {
-                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
-                }
+                await deleteFromFirestore('salesOrders', id);
+                mockData.salesOrders = mockData.salesOrders.filter(o => o.id !== id);
+                saveToCache();
+                showToast('ลบใบสั่งซื้อสำเร็จ!');
+                render();
             }
         };
 
@@ -955,6 +1086,180 @@
             printWindow.onload = () => printWindow.print();
         };
 
+        // ===================== EXCEL IMPORT / EXPORT =====================
+        window.exportSOToExcel = function () {
+            const allSO = mockData.salesOrders;
+            if (allSO.length === 0) {
+                showToast('ไม่มีข้อมูลให้ Export', 'error');
+                return;
+            }
+            const rows = [];
+            allSO.forEach(so => {
+                const items = so.items || [];
+                if (items.length === 0) {
+                    rows.push({
+                        'เลขที่ SO': so.soNumber || '', 'วันที่สั่งซื้อ': so.orderDate || '',
+                        'ลูกค้า': so.customerName || '', 'อ้างอิง PO': so.customerRef || '',
+                        'สินค้า': '', 'แบรนด์': '', 'ขนาดบรรจุ (กก.)': '', 'จำนวน': '',
+                        'หน่วย': '', 'ราคา/หน่วย': '', 'จำนวนเงิน': '', 'น้ำหนักรวม (กก.)': '',
+                        'วันที่นัดส่ง': so.deliveryDate || '', 'วิธีจัดส่ง': so.deliveryMethod || '',
+                        'เงื่อนไขค่าขนส่ง': so.freightTerms || '', 'เงื่อนไขชำระเงิน': so.paymentTerms || '',
+                        'ส่วนลด': so.discount || 0, 'ยอดสุทธิ': so.grandTotal || 0,
+                        'สถานะ': so.status || '', 'หมายเหตุภายใน': so.internalRemarks || '',
+                        'หมายเหตุท้ายบิล': so.customerRemarks || ''
+                    });
+                } else {
+                    items.forEach((item, idx) => {
+                        rows.push({
+                            'เลขที่ SO': idx === 0 ? (so.soNumber || '') : '',
+                            'วันที่สั่งซื้อ': idx === 0 ? (so.orderDate || '') : '',
+                            'ลูกค้า': idx === 0 ? (so.customerName || '') : '',
+                            'อ้างอิง PO': idx === 0 ? (so.customerRef || '') : '',
+                            'สินค้า': item.product || '', 'แบรนด์': item.brand || '',
+                            'ขนาดบรรจุ (กก.)': item.packSize || '', 'จำนวน': item.qty || '',
+                            'หน่วย': item.unit || 'กระสอบ', 'ราคา/หน่วย': item.unitPrice || '',
+                            'จำนวนเงิน': item.amount || '', 'น้ำหนักรวม (กก.)': item.totalWeight || '',
+                            'วันที่นัดส่ง': idx === 0 ? (so.deliveryDate || '') : '',
+                            'วิธีจัดส่ง': idx === 0 ? (so.deliveryMethod || '') : '',
+                            'เงื่อนไขค่าขนส่ง': idx === 0 ? (so.freightTerms || '') : '',
+                            'เงื่อนไขชำระเงิน': idx === 0 ? (so.paymentTerms || '') : '',
+                            'ส่วนลด': idx === 0 ? (so.discount || 0) : '',
+                            'ยอดสุทธิ': idx === 0 ? (so.grandTotal || 0) : '',
+                            'สถานะ': idx === 0 ? (so.status || '') : '',
+                            'หมายเหตุภายใน': idx === 0 ? (so.internalRemarks || '') : '',
+                            'หมายเหตุท้ายบิล': idx === 0 ? (so.customerRemarks || '') : ''
+                        });
+                    });
+                }
+            });
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const colWidths = Object.keys(rows[0]).map(key => ({
+                wch: Math.max(key.length + 2, ...rows.map(r => String(r[key] || '').length + 2))
+            }));
+            ws['!cols'] = colWidths;
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Sales Orders');
+            XLSX.writeFile(wb, `SO_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+            showToast(`Export สำเร็จ! (${allSO.length} รายการ)`);
+        };
+
+        window.downloadSOTemplate = function () {
+            const headers = [
+                'เลขที่ SO', 'วันที่สั่งซื้อ', 'ลูกค้า', 'อ้างอิง PO',
+                'สินค้า', 'แบรนด์', 'ขนาดบรรจุ (กก.)', 'จำนวน', 'หน่วย', 'ราคา/หน่วย',
+                'วันที่นัดส่ง', 'วิธีจัดส่ง', 'เงื่อนไขค่าขนส่ง',
+                'เงื่อนไขชำระเงิน', 'ส่วนลด', 'สถานะ', 'หมายเหตุภายใน', 'หมายเหตุท้ายบิล'
+            ];
+            const example1 = ['', '2026-02-21', 'บริษัท ABC จำกัด', 'PO-001',
+                'ข้าวเหนียวใหม่', 'ตราปลาวาฬ', 48, 100, 'กระสอบ', 850,
+                '2026-02-25', 'รถโรงสีไปส่ง', 'ราคาขายรวมค่าส่งแล้ว',
+                'เงินสด (COD)', 0, 'จัดเตรียมผลิต', '', ''];
+            const example2 = ['', '', '', '',
+                'มะลิใหม่', 'ตราไผ่ทอง', 15, 50, 'กระสอบ', 650,
+                '', '', '', '', '', '', '', ''];
+            const ws = XLSX.utils.aoa_to_sheet([headers, example1, example2]);
+            ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 14) }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Template');
+            XLSX.writeFile(wb, 'SO_Import_Template.xlsx');
+            showToast('ดาวน์โหลด Template สำเร็จ!');
+        };
+
+        window.importSOFromExcel = function () {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.xlsx,.xls';
+            input.onchange = async function (e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                try {
+                    const data = await file.arrayBuffer();
+                    const wb = XLSX.read(data);
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+                    if (rows.length === 0) {
+                        showToast('ไฟล์ไม่มีข้อมูล', 'error');
+                        return;
+                    }
+
+                    // Group rows into SOs: rows with 'ลูกค้า' filled start a new SO
+                    const soGroups = [];
+                    let current = null;
+                    rows.forEach(row => {
+                        const customer = String(row['ลูกค้า'] || '').trim();
+                        if (customer) {
+                            current = { header: row, items: [] };
+                            soGroups.push(current);
+                        }
+                        if (current && String(row['สินค้า'] || '').trim()) {
+                            current.items.push(row);
+                        }
+                    });
+
+                    if (soGroups.length === 0) {
+                        showToast('ไม่พบข้อมูล SO ที่ถูกต้อง', 'error');
+                        return;
+                    }
+
+                    let importedCount = 0;
+                    for (const group of soGroups) {
+                        const h = group.header;
+                        const soNumber = String(h['เลขที่ SO'] || '').trim() || generateSONumber();
+                        const items = group.items.map(r => {
+                            const qty = parseNum(r['จำนวน']);
+                            const price = parseNum(r['ราคา/หน่วย']);
+                            const pack = parseNum(r['ขนาดบรรจุ (กก.)']);
+                            return {
+                                product: String(r['สินค้า'] || '').trim(),
+                                brand: String(r['แบรนด์'] || '').trim(),
+                                packSize: pack, qty: qty,
+                                unit: String(r['หน่วย'] || 'กระสอบ').trim(),
+                                unitPrice: price,
+                                amount: qty * price,
+                                totalWeight: qty * pack
+                            };
+                        });
+                        const subtotal = items.reduce((s, i) => s + i.amount, 0);
+                        const discount = parseNum(h['ส่วนลด']);
+                        const soData = {
+                            soNumber: soNumber,
+                            orderDate: String(h['วันที่สั่งซื้อ'] || new Date().toISOString().split('T')[0]).trim(),
+                            customerName: String(h['ลูกค้า'] || '').trim(),
+                            customerRef: String(h['อ้างอิง PO'] || '').trim(),
+                            items: items,
+                            deliveryDate: String(h['วันที่นัดส่ง'] || '').trim(),
+                            deliveryMethod: String(h['วิธีจัดส่ง'] || '').trim(),
+                            freightTerms: String(h['เงื่อนไขค่าขนส่ง'] || '').trim(),
+                            truckNo: '', driverName: '', shippingAddress: '',
+                            paymentTerms: String(h['เงื่อนไขชำระเงิน'] || 'เงินสด (COD)').trim(),
+                            subtotal: subtotal, discount: discount, grandTotal: subtotal - discount,
+                            internalRemarks: String(h['หมายเหตุภายใน'] || '').trim(),
+                            customerRemarks: String(h['หมายเหตุท้ายบิล'] || '').trim(),
+                            status: String(h['สถานะ'] || 'จัดเตรียมผลิต').trim(),
+                            id: 'temp_' + Date.now().toString() + '_' + importedCount,
+                            createdAt: new Date().toISOString()
+                        };
+                        try {
+                            const newId = await saveToFirestore('salesOrders', soData);
+                            soData.id = newId;
+                        } catch (err) {
+                            console.error('Firestore save error during import:', err);
+                        }
+                        mockData.salesOrders.unshift(soData);
+                        importedCount++;
+                    }
+
+                    saveToCache();
+                    showToast(`Import สำเร็จ! นำเข้า ${importedCount} ใบสั่งซื้อ`);
+                    render();
+                } catch (err) {
+                    console.error('Import error:', err);
+                    showToast('เกิดข้อผิดพลาดในการอ่านไฟล์ Excel', 'error');
+                }
+            };
+            input.click();
+        };
+
         // Keep old editOrder for backward compat
         window.editOrder = function (id) {
             const order = mockData.orders.find(o => o.id === id);
@@ -1080,33 +1385,30 @@
             // Close modal immediately for better UX
             document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
-            try {
-                if (editId) {
-                    // Edit existing item
-                    const index = mockData.inventory.findIndex(i => i.id === editId);
-                    if (index !== -1) {
-                        mockData.inventory[index] = {
-                            ...mockData.inventory[index],
-                            ...itemData
-                        };
-                        await saveToFirestore('inventory', mockData.inventory[index]);
-                    }
-                } else {
-                    // Add new item
-                    const newItem = {
-                        ...itemData,
-                        id: 'temp_' + Date.now().toString()
+            if (editId) {
+                // Edit existing item
+                const index = mockData.inventory.findIndex(i => i.id === editId);
+                if (index !== -1) {
+                    mockData.inventory[index] = {
+                        ...mockData.inventory[index],
+                        ...itemData
                     };
-                    const newId = await saveToFirestore('inventory', newItem);
-                    newItem.id = newId;
-                    mockData.inventory.push(newItem);
+                    await saveToFirestore('inventory', mockData.inventory[index]);
                 }
-
-                showToast('บันทึกสำเร็จ!');
-                render();
-            } catch (error) {
-                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
+            } else {
+                // Add new item
+                const newItem = {
+                    ...itemData,
+                    id: 'temp_' + Date.now().toString()
+                };
+                const newId = await saveToFirestore('inventory', newItem);
+                newItem.id = newId;
+                mockData.inventory.push(newItem);
             }
+
+            saveToCache();
+            showToast('บันทึกสำเร็จ!');
+            render();
         };
 
         window.handleSiloSave = async function (form, editId = '') {
@@ -1125,49 +1427,40 @@
             // Close modal immediately for better UX
             document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
 
-            try {
-                if (editId) {
-                    // Edit existing silo
-                    const index = mockData.silos.findIndex(s => s.id === editId);
-                    if (index !== -1) {
-                        mockData.silos[index] = {
-                            ...mockData.silos[index],
-                            ...siloData
-                        };
-                        await saveToFirestore('silos', mockData.silos[index]);
-                    }
+            if (editId) {
+                // Edit existing silo
+                const index = mockData.silos.findIndex(s => s.id === editId);
+                if (index !== -1) {
+                    mockData.silos[index] = {
+                        ...mockData.silos[index],
+                        ...siloData
+                    };
+                    await saveToFirestore('silos', mockData.silos[index]);
                 }
-
-                showToast('บันทึกสำเร็จ!');
-                render();
-            } catch (error) {
-                showToast('เกิดข้อผิดพลาดในการบันทึก!', 'error');
             }
+
+            saveToCache();
+            showToast('บันทึกสำเร็จ!');
+            render();
         };
 
         async function deleteOrder(id) {
             if (confirm('ยืนยันการลบ?')) {
-                try {
-                    await deleteFromFirestore('orders', id);
-                    mockData.orders = mockData.orders.filter(o => o.id !== id);
-                    showToast('ลบสำเร็จ!');
-                    render();
-                } catch (error) {
-                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
-                }
+                await deleteFromFirestore('orders', id);
+                mockData.orders = mockData.orders.filter(o => o.id !== id);
+                saveToCache();
+                showToast('ลบสำเร็จ!');
+                render();
             }
         }
 
         window.deleteInventory = async function (id) {
             if (confirm('ยืนยันการลบสินค้านี้?')) {
-                try {
-                    await deleteFromFirestore('inventory', id);
-                    mockData.inventory = mockData.inventory.filter(i => i.id !== id);
-                    showToast('ลบสินค้าสำเร็จ!');
-                    render();
-                } catch (error) {
-                    showToast('เกิดข้อผิดพลาดในการลบ!', 'error');
-                }
+                await deleteFromFirestore('inventory', id);
+                mockData.inventory = mockData.inventory.filter(i => i.id !== id);
+                saveToCache();
+                showToast('ลบสินค้าสำเร็จ!');
+                render();
             }
         };
 
@@ -1310,6 +1603,230 @@
 
         window.setSOFilter = function (status) { soFilter = status; render(); };
         window.setSOSort = function (val) { soSort = val; render(); };
+        window.setSOViewMode = function (mode) { soViewMode = mode; render(); };
+
+        // ===================== KANBAN DRAG & DROP =====================
+        let kanbanDragState = { dragging: null, fromCol: null };
+
+        window.kanbanDragStart = function (e, soId, colKey) {
+            kanbanDragState.dragging = soId;
+            kanbanDragState.fromCol = colKey;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', soId);
+            // Delay adding class so the drag image captures the original look
+            requestAnimationFrame(() => {
+                e.target.closest('.kanban-card').classList.add('dragging');
+            });
+        };
+
+        window.kanbanDragEnd = function (e) {
+            kanbanDragState.dragging = null;
+            kanbanDragState.fromCol = null;
+            document.querySelectorAll('.kanban-card.dragging').forEach(el => el.classList.remove('dragging'));
+            document.querySelectorAll('.kanban-drop-indicator.active').forEach(el => el.classList.remove('active'));
+        };
+
+        window.kanbanDragOver = function (e, colKey) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const column = e.currentTarget;
+            const cards = [...column.querySelectorAll('.kanban-card:not(.dragging)')];
+            const indicators = [...column.querySelectorAll('.kanban-drop-indicator')];
+
+            // Clear all indicators in this column
+            indicators.forEach(ind => ind.classList.remove('active'));
+
+            // Find closest card below cursor
+            const mouseY = e.clientY;
+            let closestCard = null;
+            let closestOffset = Number.NEGATIVE_INFINITY;
+
+            cards.forEach(card => {
+                const rect = card.getBoundingClientRect();
+                const offset = mouseY - rect.top - rect.height / 2;
+                if (offset < 0 && offset > closestOffset) {
+                    closestOffset = offset;
+                    closestCard = card;
+                }
+            });
+
+            // Show correct indicator
+            if (closestCard) {
+                const indicator = closestCard.previousElementSibling;
+                if (indicator && indicator.classList.contains('kanban-drop-indicator')) {
+                    indicator.classList.add('active');
+                }
+            } else {
+                // Show last indicator (bottom)
+                const lastIndicator = indicators[indicators.length - 1];
+                if (lastIndicator) lastIndicator.classList.add('active');
+            }
+        };
+
+        window.kanbanDragLeave = function (e) {
+            // Only clear if truly leaving the container
+            if (!e.currentTarget.contains(e.relatedTarget)) {
+                e.currentTarget.querySelectorAll('.kanban-drop-indicator.active').forEach(el => el.classList.remove('active'));
+            }
+        };
+
+        // ===================== INVENTORY DRAG & DROP =====================
+        let invDragState = { dragging: null, fromZone: null };
+
+        window.invDragStart = function (e, itemId, zoneName) {
+            invDragState.dragging = itemId;
+            invDragState.fromZone = zoneName;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', itemId);
+            requestAnimationFrame(() => {
+                const card = e.target.closest('.inv-card');
+                if (card) card.classList.add('dragging');
+            });
+        };
+
+        window.invDragEnd = function (e) {
+            invDragState.dragging = null;
+            invDragState.fromZone = null;
+            document.querySelectorAll('.inv-card.dragging').forEach(el => el.classList.remove('dragging'));
+            document.querySelectorAll('.inv-drop-indicator.active').forEach(el => el.classList.remove('active'));
+        };
+
+        window.invDragOver = function (e, zoneName) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            const container = e.currentTarget;
+            const cards = [...container.querySelectorAll('.inv-card:not(.dragging)')];
+            const indicators = [...container.querySelectorAll('.inv-drop-indicator')];
+
+            indicators.forEach(ind => ind.classList.remove('active'));
+
+            // In a grid layout, find the card closest to the cursor
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            let closestCard = null;
+            let closestDist = Infinity;
+
+            cards.forEach(card => {
+                const rect = card.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const dist = Math.hypot(mouseX - cx, mouseY - cy);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closestCard = card;
+                }
+            });
+
+            if (closestCard) {
+                const rect = closestCard.getBoundingClientRect();
+                const isBeforeCard = mouseX < rect.left + rect.width / 2;
+                const indicator = isBeforeCard
+                    ? closestCard.previousElementSibling
+                    : closestCard.nextElementSibling;
+                if (indicator && indicator.classList.contains('inv-drop-indicator')) {
+                    indicator.classList.add('active');
+                }
+            } else {
+                const lastIndicator = indicators[indicators.length - 1];
+                if (lastIndicator) lastIndicator.classList.add('active');
+            }
+        };
+
+        window.invDragLeave = function (e) {
+            if (!e.currentTarget.contains(e.relatedTarget)) {
+                e.currentTarget.querySelectorAll('.inv-drop-indicator.active').forEach(el => el.classList.remove('active'));
+            }
+        };
+
+        window.invDrop = function (e, zoneName) {
+            e.preventDefault();
+            const draggedId = invDragState.dragging;
+            if (!draggedId) return;
+
+            const container = e.currentTarget;
+            const cards = [...container.querySelectorAll('.inv-card:not(.dragging)')];
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+
+            const allCardsInZone = [...container.querySelectorAll('.inv-card')];
+            let currentIds = allCardsInZone.map(c => c.dataset.itemId).filter(id => id !== draggedId);
+
+            // Find insertion index based on cursor position
+            let insertIdx = currentIds.length;
+            let closestCard = null;
+            let closestDist = Infinity;
+
+            cards.forEach(card => {
+                const rect = card.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const dist = Math.hypot(mouseX - cx, mouseY - cy);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closestCard = card;
+                }
+            });
+
+            if (closestCard) {
+                const rect = closestCard.getBoundingClientRect();
+                const cardId = closestCard.dataset.itemId;
+                const idx = currentIds.indexOf(cardId);
+                if (idx !== -1) {
+                    const isBeforeCard = mouseX < rect.left + rect.width / 2;
+                    insertIdx = isBeforeCard ? idx : idx + 1;
+                }
+            }
+
+            currentIds.splice(insertIdx, 0, draggedId);
+
+            inventorySortOrder[zoneName] = currentIds;
+            localStorage.setItem('inventorySortOrder', JSON.stringify(inventorySortOrder));
+
+            container.querySelectorAll('.inv-drop-indicator.active').forEach(el => el.classList.remove('active'));
+
+            render();
+        };
+
+        window.kanbanDrop = function (e, colKey) {
+            e.preventDefault();
+            const draggedId = kanbanDragState.dragging;
+            if (!draggedId) return;
+
+            const column = e.currentTarget;
+            const cards = [...column.querySelectorAll('.kanban-card:not(.dragging)')];
+            const mouseY = e.clientY;
+
+            // Get current order of IDs in this column
+            const allCardsInCol = [...column.querySelectorAll('.kanban-card')];
+            let currentIds = allCardsInCol.map(c => c.dataset.soId).filter(id => id !== draggedId);
+
+            // Find insertion index
+            let insertIdx = currentIds.length; // default: end
+            for (let i = 0; i < cards.length; i++) {
+                const rect = cards[i].getBoundingClientRect();
+                if (mouseY < rect.top + rect.height / 2) {
+                    const cardId = cards[i].dataset.soId;
+                    insertIdx = currentIds.indexOf(cardId);
+                    if (insertIdx === -1) insertIdx = currentIds.length;
+                    break;
+                }
+            }
+
+            // Insert dragged id at position
+            currentIds.splice(insertIdx, 0, draggedId);
+
+            // Save to kanbanSortOrder
+            kanbanSortOrder[colKey] = currentIds;
+            localStorage.setItem('kanbanSortOrder', JSON.stringify(kanbanSortOrder));
+
+            // Clear indicators
+            column.querySelectorAll('.kanban-drop-indicator.active').forEach(el => el.classList.remove('active'));
+
+            // Re-render
+            render();
+        };
 
         function renderOrders() {
             const allSO = mockData.salesOrders;
@@ -1370,8 +1887,8 @@
                                     `;
             }).join('')}
                             </div>
-                            <!-- Sort Control -->
-                            <div class="flex items-center gap-2">
+                            <!-- Sort & View Controls -->
+                            <div class="flex items-center gap-3">
                                 <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">เรียงตาม:</span>
                                 <select onchange="setSOSort(this.value)" class="px-3 py-2 text-sm border-2 border-gray-200 dark:border-gray-600 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 transition-all cursor-pointer">
                                     <option value="orderDate-desc" ${soSort === 'orderDate-desc' ? 'selected' : ''}>📅 วันสั่ง (ล่าสุด)</option>
@@ -1379,6 +1896,24 @@
                                     <option value="deliveryDate-desc" ${soSort === 'deliveryDate-desc' ? 'selected' : ''}>🚚 วันส่ง (ล่าสุด)</option>
                                     <option value="deliveryDate-asc" ${soSort === 'deliveryDate-asc' ? 'selected' : ''}>🚚 วันส่ง (เก่าสุด)</option>
                                 </select>
+                                <!-- View Toggle -->
+                                <div class="flex items-center bg-gray-100 dark:bg-gray-700 rounded-xl p-1 gap-0.5">
+                                    <button onclick="setSOViewMode('list')" class="p-2 rounded-lg transition-all ${soViewMode === 'list' ? 'bg-white dark:bg-gray-600 shadow-md text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}" title="มุมมองรายการ">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                                    </button>
+                                    <button onclick="setSOViewMode('kanban')" class="p-2 rounded-lg transition-all ${soViewMode === 'kanban' ? 'bg-white dark:bg-gray-600 shadow-md text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}" title="มุมมอง Kanban (ตามวันจัดส่ง)">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg>
+                                    </button>
+                                    <button onclick="setSOViewMode('daily')" class="p-2 rounded-lg transition-all ${soViewMode === 'daily' ? 'bg-white dark:bg-gray-600 shadow-md text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}" title="สรุปรายวันจัดส่ง">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="10" y1="14" x2="14" y2="14"/><line x1="10" y1="18" x2="14" y2="18"/></svg>
+                                    </button>
+                                    <button onclick="setSOViewMode('customer')" class="p-2 rounded-lg transition-all ${soViewMode === 'customer' ? 'bg-white dark:bg-gray-600 shadow-md text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}" title="สรุปตามลูกค้า">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                                    </button>
+                                    <button onclick="setSOViewMode('payment')" class="p-2 rounded-lg transition-all ${soViewMode === 'payment' ? 'bg-white dark:bg-gray-600 shadow-md text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'}" title="ติดตามการชำระเงิน">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1391,69 +1926,226 @@
                         </p>
                     </div>
 
-                    <!-- SO Cards -->
-                    ${filtered.length === 0 ? `
-                        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
-                            <div class="flex flex-col items-center gap-4">
-                                <span class="text-6xl opacity-40">${soFilter === 'ทั้งหมด' ? '📝' : filterIcons[soFilter]}</span>
-                                <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
-                                    ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ (Sales Order)' : `ไม่มีรายการสถานะ "${soFilter}"`}
-                                </p>
-                                <p class="text-sm text-gray-400 dark:text-gray-500">
-                                    ${allSO.length === 0 ? 'กดปุ่ม "สร้างใบสั่งซื้อ" ด้านบนเพื่อเริ่มต้น' : 'ลองเปลี่ยนตัวกรองสถานะ'}
-                                </p>
-                            </div>
+                    <!-- SO Content (List or Kanban) -->
+                    ${soViewMode === 'kanban' ? renderOrdersKanban(filtered, allSO, STATUS_CONFIG) : soViewMode === 'daily' ? renderOrdersDailySummary(filtered, allSO, STATUS_CONFIG) : soViewMode === 'customer' ? renderOrdersByCustomer(filtered, allSO, STATUS_CONFIG) : soViewMode === 'payment' ? renderOrdersPayment(filtered, allSO, STATUS_CONFIG) : renderOrdersList(filtered, allSO, STATUS_CONFIG, filterIcons)}
+                </div>
+            `;
+        }
+
+        function renderOrdersList(filtered, allSO, STATUS_CONFIG, filterIcons) {
+            if (filtered.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-6xl opacity-40">${soFilter === 'ทั้งหมด' ? '📝' : filterIcons[soFilter]}</span>
+                            <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
+                                ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ (Sales Order)' : `ไม่มีรายการสถานะ "${soFilter}"`}
+                            </p>
+                            <p class="text-sm text-gray-400 dark:text-gray-500">
+                                ${allSO.length === 0 ? 'กดปุ่ม "สร้างใบสั่งซื้อ" ด้านบนเพื่อเริ่มต้น' : 'ลองเปลี่ยนตัวกรองสถานะ'}
+                            </p>
                         </div>
-                    ` : filtered.map(so => {
+                    </div>
+                `;
+            }
+            return filtered.map(so => {
                 const cfg = STATUS_CONFIG[so.status] || STATUS_CONFIG['จัดเตรียมผลิต'];
                 const itemsSummary = (so.items || []).map(i => i.product).join(', ');
                 const totalWeight = (so.items || []).reduce((s, i) => s + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden hover:shadow-xl transition-all card-hover border-l-4 ${cfg.border}">
+                        <div class="p-5">
+                            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                                <div class="flex items-center gap-3">
+                                    <span class="text-lg font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-lg">${so.soNumber}</span>
+                                    <span class="px-3 py-1.5 rounded-full text-xs font-semibold ${cfg.color}">${cfg.icon} ${so.status}</span>
+                                    ${so.customerRef ? `<span class="text-xs text-gray-400 dark:text-gray-500">PO: ${so.customerRef}</span>` : ''}
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button onclick="printSO('${so.id}')" class="px-3 py-2 text-green-600 hover:text-green-800 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                        🖨️ พิมพ์
+                                    </button>
+                                    <button onclick="editSO('${so.id}')" class="px-3 py-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                        ${icons.edit} แก้ไข
+                                    </button>
+                                    <button onclick="deleteSO('${so.id}')" class="px-3 py-2 text-red-600 hover:text-red-800 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
+                                        ${icons.delete} ลบ
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ลูกค้า</p>
+                                    <p class="font-semibold text-gray-800 dark:text-white">${so.customerName || '-'}</p>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">สินค้า (${(so.items || []).length} รายการ)</p>
+                                    <p class="text-sm text-gray-700 dark:text-gray-300 truncate" title="${itemsSummary}">${itemsSummary || '-'}</p>
+                                </div>
+                                <div>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">น้ำหนักรวม</p>
+                                    <p class="text-sm font-medium text-blue-600 dark:text-blue-400">${totalWeight > 0 ? `${formatNumber(totalWeight)} กก.` : '-'}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ยอดสุทธิ</p>
+                                    <p class="text-xl font-bold text-green-600 dark:text-green-400">${formatCurrency(parseNum(so.grandTotal))}</p>
+                                </div>
+                            </div>
+                            <div class="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                                <span>📅 สั่ง: ${formatDate(so.orderDate)}</span>
+                                ${so.deliveryDate ? `<span>🚚 ส่ง: ${formatDate(so.deliveryDate)}</span>` : ''}
+                                ${so.deliveryMethod ? `<span>📦 ${so.deliveryMethod}</span>` : ''}
+                                ${so.paymentTerms ? `<span>💳 ${so.paymentTerms}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderOrdersKanban(filtered, allSO, STATUS_CONFIG) {
+            if (filtered.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-6xl opacity-40">📋</span>
+                            <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
+                                ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ (Sales Order)' : `ไม่มีรายการสถานะ "${soFilter}"`}
+                            </p>
+                            <p class="text-sm text-gray-400 dark:text-gray-500">
+                                ${allSO.length === 0 ? 'กดปุ่ม "สร้างใบสั่งซื้อ" ด้านบนเพื่อเริ่มต้น' : 'ลองเปลี่ยนตัวกรองสถานะ'}
+                            </p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Group by delivery date
+            const groups = {};
+            filtered.forEach(so => {
+                const key = so.deliveryDate || '__none__';
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(so);
+            });
+
+            // Apply custom sort order within each group
+            Object.keys(groups).forEach(key => {
+                const savedOrder = kanbanSortOrder[key];
+                if (savedOrder && savedOrder.length > 0) {
+                    groups[key].sort((a, b) => {
+                        const idxA = savedOrder.indexOf(a.id);
+                        const idxB = savedOrder.indexOf(b.id);
+                        // Items not in saved order go to the end
+                        const posA = idxA === -1 ? 9999 : idxA;
+                        const posB = idxB === -1 ? 9999 : idxB;
+                        return posA - posB;
+                    });
+                }
+            });
+
+            // Sort column keys chronologically, "no date" last
+            const sortedKeys = Object.keys(groups).sort((a, b) => {
+                if (a === '__none__') return 1;
+                if (b === '__none__') return -1;
+                return a.localeCompare(b);
+            });
+
+            // Determine if a date is today, past, or future
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            // Color palette for columns
+            const colColors = ['green', 'blue', 'purple', 'amber', 'cyan', 'pink', 'indigo', 'teal', 'orange', 'rose'];
+
+            return `
+                <div class="flex gap-4 overflow-x-auto kanban-scroll pb-4" style="min-height: 400px;">
+                    ${sortedKeys.map((key, colIdx) => {
+                const sos = groups[key];
+                const isNoDate = key === '__none__';
+                const colLabel = isNoDate ? '📌 ไม่ระบุวันส่ง' : `📅 ${formatDate(key)}`;
+                const isPast = !isNoDate && key < todayStr;
+                const isToday = !isNoDate && key === todayStr;
+                const colColor = colColors[colIdx % colColors.length];
+                const totalAmount = sos.reduce((s, so) => s + parseNum(so.grandTotal), 0);
 
                 return `
-                            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden hover:shadow-xl transition-all card-hover border-l-4 ${cfg.border}">
-                                <div class="p-5">
-                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
-                                        <div class="flex items-center gap-3">
-                                            <span class="text-lg font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-lg">${so.soNumber}</span>
-                                            <span class="px-3 py-1.5 rounded-full text-xs font-semibold ${cfg.color}">${cfg.icon} ${so.status}</span>
-                                            ${so.customerRef ? `<span class="text-xs text-gray-400 dark:text-gray-500">PO: ${so.customerRef}</span>` : ''}
-                                        </div>
-                                        <div class="flex items-center gap-2">
-                                            <button onclick="printSO('${so.id}')" class="px-3 py-2 text-green-600 hover:text-green-800 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
-                                                🖨️ พิมพ์
-                                            </button>
-                                            <button onclick="editSO('${so.id}')" class="px-3 py-2 text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
-                                                ${icons.edit} แก้ไข
-                                            </button>
-                                            <button onclick="deleteSO('${so.id}')" class="px-3 py-2 text-red-600 hover:text-red-800 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all text-sm font-medium flex items-center gap-1">
-                                                ${icons.delete} ลบ
-                                            </button>
-                                        </div>
+                            <div class="flex-shrink-0 w-80 flex flex-col rounded-2xl border-2 ${isToday ? 'border-green-400 dark:border-green-600 bg-green-50/50 dark:bg-green-900/10' :
+                        isPast ? 'border-red-200 dark:border-red-800 bg-red-50/30 dark:bg-red-900/10' :
+                            isNoDate ? 'border-gray-300 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-800/50' :
+                                'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
+                    } shadow-lg overflow-hidden">
+                                <!-- Column Header -->
+                                <div class="p-4 border-b-2 ${isToday ? 'border-green-300 dark:border-green-700 bg-gradient-to-r from-green-100 to-emerald-100 dark:from-green-900/30 dark:to-emerald-900/30' :
+                        isPast ? 'border-red-200 dark:border-red-800 bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/20 dark:to-orange-900/20' :
+                            isNoDate ? 'border-gray-200 dark:border-gray-700 bg-gradient-to-r from-gray-100 to-gray-50 dark:from-gray-700 dark:to-gray-800' :
+                                'border-gray-200 dark:border-gray-700 bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20'
+                    }">
+                                    <div class="flex items-center justify-between mb-1">
+                                        <h3 class="font-bold text-sm ${isToday ? 'text-green-800 dark:text-green-300' :
+                        isPast ? 'text-red-700 dark:text-red-400' :
+                            'text-gray-800 dark:text-white'
+                    }">${colLabel}</h3>
+                                        <span class="px-2 py-0.5 rounded-full text-xs font-bold ${isToday ? 'bg-green-600 text-white' :
+                        isPast ? 'bg-red-500 text-white' :
+                            isNoDate ? 'bg-gray-500 text-white' :
+                                'bg-blue-500 text-white'
+                    }">${sos.length}</span>
                                     </div>
-                                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                        <div>
-                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ลูกค้า</p>
-                                            <p class="font-semibold text-gray-800 dark:text-white">${so.customerName || '-'}</p>
-                                        </div>
-                                        <div>
-                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">สินค้า (${(so.items || []).length} รายการ)</p>
-                                            <p class="text-sm text-gray-700 dark:text-gray-300 truncate" title="${itemsSummary}">${itemsSummary || '-'}</p>
-                                        </div>
-                                        <div>
-                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">น้ำหนักรวม</p>
-                                            <p class="text-sm font-medium text-blue-600 dark:text-blue-400">${totalWeight > 0 ? `${formatNumber(totalWeight)} กก.` : '-'}</p>
-                                        </div>
-                                        <div class="text-right">
-                                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-0.5">ยอดสุทธิ</p>
-                                            <p class="text-xl font-bold text-green-600 dark:text-green-400">${formatCurrency(parseNum(so.grandTotal))}</p>
-                                        </div>
-                                    </div>
-                                    <div class="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 flex flex-wrap items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
-                                        <span>📅 สั่ง: ${formatDate(so.orderDate)}</span>
-                                        ${so.deliveryDate ? `<span>🚚 ส่ง: ${formatDate(so.deliveryDate)}</span>` : ''}
-                                        ${so.deliveryMethod ? `<span>📦 ${so.deliveryMethod}</span>` : ''}
-                                        ${so.paymentTerms ? `<span>💳 ${so.paymentTerms}</span>` : ''}
-                                    </div>
+                                    ${isToday ? '<div class="text-xs font-semibold text-green-600 dark:text-green-400">📍 วันนี้</div>' : ''}
+                                    ${isPast ? '<div class="text-xs font-semibold text-red-500 dark:text-red-400">⚠️ เลยกำหนดส่ง</div>' : ''}
+                                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">รวม: ${formatCurrency(totalAmount)}</div>
+                                </div>
+                                <!-- Column Cards -->
+                                <div class="flex-1 p-3 overflow-y-auto kanban-col-cards" data-col-key="${key}" 
+                                    ondragover="kanbanDragOver(event, '${key}')" 
+                                    ondragleave="kanbanDragLeave(event)" 
+                                    ondrop="kanbanDrop(event, '${key}')" 
+                                    style="max-height: calc(100vh - 340px);">
+                                    ${sos.map((so, soIdx) => {
+                        const cfg = STATUS_CONFIG[so.status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                        const itemsSummary = (so.items || []).map(i => i.product).filter(Boolean).join(', ');
+                        const totalQty = (so.items || []).reduce((s, i) => s + parseNum(i.qty), 0);
+                        return `
+                                            <div class="kanban-drop-indicator"></div>
+                                            <div class="kanban-card bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-lg transition-all p-3.5 group" 
+                                                draggable="true" 
+                                                data-so-id="${so.id}" 
+                                                ondragstart="kanbanDragStart(event, '${so.id}', '${key}')" 
+                                                ondragend="kanbanDragEnd(event)">
+                                                <!-- Drag Handle + Card Header -->
+                                                <div class="flex items-center justify-between mb-2">
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="text-gray-300 dark:text-gray-600 cursor-grab active:cursor-grabbing select-none" title="ลากเพื่อเรียงลำดับ">⠿</span>
+                                                        <span class="text-sm font-bold text-green-600 dark:text-green-400">${so.soNumber}</span>
+                                                    </div>
+                                                    <span class="px-2 py-1 rounded-full text-[10px] font-semibold ${cfg.color}">${cfg.icon} ${so.status}</span>
+                                                </div>
+                                                <!-- Customer -->
+                                                <div class="mb-2">
+                                                    <p class="font-semibold text-sm text-gray-800 dark:text-white truncate">${so.customerName || '-'}</p>
+                                                    ${so.customerRef ? `<p class="text-[10px] text-gray-400 dark:text-gray-500">PO: ${so.customerRef}</p>` : ''}
+                                                </div>
+                                                <!-- Items -->
+                                                <div class="text-xs text-gray-600 dark:text-gray-400 mb-2 truncate" title="${itemsSummary}">
+                                                    📦 ${itemsSummary || '-'}
+                                                    ${totalQty > 0 ? `<span class="text-gray-400">(${formatNumber(totalQty)} กระสอบ)</span>` : ''}
+                                                </div>
+                                                <!-- Amount -->
+                                                <div class="flex items-center justify-between mb-2">
+                                                    <span class="text-xs text-gray-500 dark:text-gray-400">📅 สั่ง: ${formatDate(so.orderDate)}</span>
+                                                    <span class="text-sm font-bold text-green-600 dark:text-green-400">${formatCurrency(parseNum(so.grandTotal))}</span>
+                                                </div>
+                                                <!-- Delivery Info -->
+                                                ${so.deliveryMethod ? `<div class="text-[10px] text-gray-400 dark:text-gray-500 mb-2">🚚 ${so.deliveryMethod}</div>` : ''}
+                                                <!-- Actions -->
+                                                <div class="flex items-center gap-1 pt-2 border-t border-gray-100 dark:border-gray-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button onclick="event.stopPropagation(); printSO('${so.id}')" class="flex-1 py-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg text-xs font-medium transition-all">🖨️</button>
+                                                    <button onclick="event.stopPropagation(); editSO('${so.id}')" class="flex-1 py-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg text-xs font-medium transition-all">${icons.edit}</button>
+                                                    <button onclick="event.stopPropagation(); deleteSO('${so.id}')" class="flex-1 py-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-xs font-medium transition-all">${icons.delete}</button>
+                                                </div>
+                                            </div>
+                                        `;
+                    }).join('')}
+                                    <div class="kanban-drop-indicator"></div>
                                 </div>
                             </div>
                         `;
@@ -1461,6 +2153,674 @@
                 </div>
             `;
         }
+
+        function renderOrdersDailySummary(filtered, allSO, STATUS_CONFIG) {
+            if (filtered.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-6xl opacity-40">📊</span>
+                            <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
+                                ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ (Sales Order)' : `ไม่มีรายการสถานะ "${soFilter}"`}
+                            </p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Group by delivery date (วันจัดส่ง)
+            const groups = {};
+            filtered.forEach(so => {
+                const key = so.deliveryDate || '__none__';
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(so);
+            });
+
+            const sortedKeys = Object.keys(groups).sort((a, b) => {
+                if (a === '__none__') return 1;
+                if (b === '__none__') return -1;
+                return b.localeCompare(a);
+            });
+
+            // Grand totals
+            const grandTotalAmount = filtered.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+            const grandTotalWeight = filtered.reduce((s, so) => {
+                return s + (so.items || []).reduce((ws, i) => ws + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+            }, 0);
+            const grandTotalQty = filtered.reduce((s, so) => {
+                return s + (so.items || []).reduce((qs, i) => qs + parseNum(i.qty), 0);
+            }, 0);
+
+            return `
+                <!-- Grand Total Summary -->
+                <div class="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-2xl border-2 border-green-200 dark:border-green-800 p-5 shadow-lg">
+                    <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                        <span class="text-xl">📊</span>
+                        สรุปรายวันจัดส่ง (Daily Delivery Summary)
+                    </h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">จำนวน SO</p>
+                            <p class="text-2xl font-bold text-gray-800 dark:text-white">${filtered.length}</p>
+                            <p class="text-xs text-gray-400">${sortedKeys.length} วัน</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">ยอดรวมทั้งหมด</p>
+                            <p class="text-2xl font-bold text-green-600 dark:text-green-400">${formatCurrency(grandTotalAmount)}</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">จำนวนกระสอบ</p>
+                            <p class="text-2xl font-bold text-blue-600 dark:text-blue-400">${formatNumber(grandTotalQty)}</p>
+                            <p class="text-xs text-gray-400">กระสอบ</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">น้ำหนักรวม</p>
+                            <p class="text-2xl font-bold text-purple-600 dark:text-purple-400">${formatNumber(grandTotalWeight)}</p>
+                            <p class="text-xs text-gray-400">กก. (${(grandTotalWeight / 1000).toFixed(2)} ตัน)</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Daily Breakdown -->
+                ${sortedKeys.map((key, idx) => {
+                const sos = groups[key];
+                const isNoDate = key === '__none__';
+                const dayLabel = isNoDate ? 'ไม่ระบุวันจัดส่ง' : formatDate(key);
+                const dayAmount = sos.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+                const dayWeight = sos.reduce((s, so) => {
+                    return s + (so.items || []).reduce((ws, i) => ws + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+                }, 0);
+                const dayQty = sos.reduce((s, so) => {
+                    return s + (so.items || []).reduce((qs, i) => qs + parseNum(i.qty), 0);
+                }, 0);
+
+                const statusBreakdown = {};
+                sos.forEach(so => {
+                    if (!statusBreakdown[so.status]) statusBreakdown[so.status] = { count: 0, amount: 0 };
+                    statusBreakdown[so.status].count++;
+                    statusBreakdown[so.status].amount += parseNum(so.grandTotal);
+                });
+
+                const todayStr = new Date().toISOString().split('T')[0];
+                const isToday = key === todayStr;
+                const dayColor = isToday ? 'green' : isNoDate ? 'gray' : 'blue';
+
+                return `
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden ${isToday ? 'ring-2 ring-green-400 dark:ring-green-600' : ''}">
+                            <!-- Day Header (clickable) -->
+                            <div class="p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all border-b border-gray-100 dark:border-gray-700" onclick="this.parentElement.querySelector('.daily-detail').classList.toggle('hidden')">
+                                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                    <div class="flex items-center gap-3">
+                                        <div class="p-2.5 rounded-xl bg-${dayColor}-100 dark:bg-${dayColor}-900/30 shadow-sm">
+                                            <span class="text-xl">${isToday ? '📍' : isNoDate ? '❓' : '📅'}</span>
+                                        </div>
+                                        <div>
+                                            <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
+                                                🚚 ${dayLabel}
+                                                ${isToday ? '<span class="text-xs font-semibold text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">วันนี้</span>' : ''}
+                                            </h3>
+                                            <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                                                <span class="text-xs text-gray-500 dark:text-gray-400">${sos.length} ใบสั่งซื้อ</span>
+                                                <span class="text-xs text-gray-400">•</span>
+                                                <span class="text-xs text-blue-600 dark:text-blue-400 font-medium">${formatNumber(dayQty)} กระสอบ</span>
+                                                <span class="text-xs text-gray-400">•</span>
+                                                <span class="text-xs text-purple-600 dark:text-purple-400 font-medium">${formatNumber(dayWeight)} กก.</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex items-center gap-1.5 flex-wrap">
+                                            ${Object.entries(statusBreakdown).map(([status, data]) => {
+                    const cfg = STATUS_CONFIG[status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                    return '<span class="px-2 py-1 rounded-full text-[10px] font-semibold ' + cfg.color + '">' + cfg.icon + ' ' + data.count + '</span>';
+                }).join('')}
+                                        </div>
+                                        <p class="text-xl font-bold text-green-600 dark:text-green-400">${formatCurrency(dayAmount)}</p>
+                                        <button onclick="event.stopPropagation(); exportDailyCSV('${key}')" class="p-1.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-800/30 rounded-lg text-xs font-semibold transition-all flex items-center gap-1" title="Export Excel วัน ${dayLabel}">📥 <span class='hidden sm:inline'>Export</span></button>
+                                        <span class="text-gray-400 dark:text-gray-500 text-sm">▼</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Detail Table (collapsible) -->
+                            <div class="daily-detail ${idx > 2 ? 'hidden' : ''}">
+                                <div class="overflow-x-auto">
+                                    <table class="w-full">
+                                        <thead class="bg-gray-50 dark:bg-gray-900/50">
+                                            <tr>
+                                                <th class="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">เลขที่ SO</th>
+                                                <th class="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ลูกค้า</th>
+                                                <th class="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">สินค้า</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">วันสั่ง</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">จำนวน</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">น้ำหนัก</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ยอดเงิน</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">สถานะ</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">จัดการ</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                            ${sos.map(so => {
+                    const cfg = STATUS_CONFIG[so.status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                    const itemsSummary = (so.items || []).map(i => i.product).filter(Boolean).join(', ');
+                    const soQty = (so.items || []).reduce((s, i) => s + parseNum(i.qty), 0);
+                    const soWeight = (so.items || []).reduce((s, i) => s + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+                    return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-all">' +
+                        '<td class="px-4 py-3"><span class="font-bold text-sm text-green-600 dark:text-green-400">' + so.soNumber + '</span>' +
+                        (so.customerRef ? '<div class="text-[10px] text-gray-400">PO: ' + so.customerRef + '</div>' : '') + '</td>' +
+                        '<td class="px-4 py-3"><span class="text-sm font-medium text-gray-800 dark:text-white">' + (so.customerName || '-') + '</span></td>' +
+                        '<td class="px-4 py-3"><span class="text-xs text-gray-600 dark:text-gray-400 line-clamp-1" title="' + itemsSummary + '">' + (itemsSummary || '-') + '</span>' +
+                        '<div class="text-[10px] text-gray-400">' + (so.items || []).length + ' รายการ</div></td>' +
+                        '<td class="px-4 py-3 text-center"><span class="text-xs text-gray-500 dark:text-gray-400">' + (so.orderDate ? formatDate(so.orderDate) : '-') + '</span></td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm font-semibold text-gray-800 dark:text-white">' + formatNumber(soQty) + '</span>' +
+                        '<div class="text-[10px] text-gray-400">กระสอบ</div></td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm font-medium text-blue-600 dark:text-blue-400">' + (soWeight > 0 ? formatNumber(soWeight) : '-') + '</span>' +
+                        (soWeight > 0 ? '<div class="text-[10px] text-gray-400">กก.</div>' : '') + '</td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm font-bold text-green-600 dark:text-green-400">' + formatCurrency(parseNum(so.grandTotal)) + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><span class="px-2 py-1 rounded-full text-[10px] font-semibold ' + cfg.color + '">' + cfg.icon + ' ' + so.status + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><div class="flex items-center justify-center gap-1">' +
+                        '<button onclick="printSO(\'' + so.id + '\')" class="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg text-xs transition-all" title="พิมพ์">🖨️</button>' +
+                        '<button onclick="editSO(\'' + so.id + '\')" class="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg text-xs transition-all" title="แก้ไข">' + icons.edit + '</button>' +
+                        '<button onclick="deleteSO(\'' + so.id + '\')" class="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-xs transition-all" title="ลบ">' + icons.delete + '</button>' +
+                        '</div></td></tr>';
+                }).join('')}
+                                            <tr class="bg-${dayColor}-50 dark:bg-${dayColor}-900/10 font-semibold">
+                                                <td class="px-4 py-3 text-sm text-gray-700 dark:text-gray-300" colspan="4">📊 รวมจัดส่ง ${dayLabel} (${sos.length} SO)</td>
+                                                <td class="px-4 py-3 text-right text-sm text-gray-800 dark:text-white">${formatNumber(dayQty)} <span class="text-[10px] font-normal text-gray-400">กระสอบ</span></td>
+                                                <td class="px-4 py-3 text-right text-sm text-blue-600 dark:text-blue-400">${formatNumber(dayWeight)} <span class="text-[10px] font-normal text-gray-400">กก.</span></td>
+                                                <td class="px-4 py-3 text-right text-sm font-bold text-green-600 dark:text-green-400">${formatCurrency(dayAmount)}</td>
+                                                <td class="px-4 py-3" colspan="2"></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+            }).join('')}
+            `;
+        }
+
+        // Export CSV for a specific delivery date
+        window.exportDailyCSV = function (deliveryDateKey) {
+            const allSO = mockData.salesOrders || [];
+            let filtered;
+            let filename;
+            if (deliveryDateKey === '__none__') {
+                filtered = allSO.filter(so => !so.deliveryDate);
+                filename = 'SO_no_delivery_date.csv';
+            } else {
+                filtered = allSO.filter(so => so.deliveryDate === deliveryDateKey);
+                filename = 'SO_deliver_' + deliveryDateKey + '.csv';
+            }
+            if (filtered.length === 0) { alert('ไม่มีรายการ'); return; }
+
+            // Build CSV rows (per line item)
+            const BOM = '\uFEFF';
+            const headers = ['เลขที่ SO', 'วันสั่ง', 'วันจัดส่ง', 'ลูกค้า', 'PO ลูกค้า', 'สินค้า', 'ขนาดบรรจุ (กก.)', 'จำนวน (กระสอบ)', 'น้ำหนักรวม (กก.)', 'ราคา/กระสอบ', 'ยอดรวม', 'สถานะ', 'วิธีจัดส่ง', 'วิธีชำระเงิน'];
+            const rows = [headers.join(',')];
+            filtered.forEach(so => {
+                const items = so.items || [];
+                if (items.length === 0) {
+                    rows.push([
+                        so.soNumber, so.orderDate || '', so.deliveryDate || '', '"' + (so.customerName || '') + '"', '"' + (so.customerRef || '') + '"',
+                        '', '', '', '', '', so.grandTotal || 0, '"' + (so.status || '') + '"', '"' + (so.deliveryMethod || '') + '"', '"' + (so.paymentMethod || '') + '"'
+                    ].join(','));
+                } else {
+                    items.forEach(item => {
+                        const w = parseNum(item.totalWeight) || (parseNum(item.qty) * parseNum(item.packSize));
+                        rows.push([
+                            so.soNumber, so.orderDate || '', so.deliveryDate || '', '"' + (so.customerName || '') + '"', '"' + (so.customerRef || '') + '"',
+                            '"' + (item.product || '') + '"', item.packSize || '', item.qty || '', w, item.unitPrice || '', item.lineTotal || '',
+                            '"' + (so.status || '') + '"', '"' + (so.deliveryMethod || '') + '"', '"' + (so.paymentMethod || '') + '"'
+                        ].join(','));
+                    });
+                }
+            });
+
+            const csv = BOM + rows.join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        function renderOrdersByCustomer(filtered, allSO, STATUS_CONFIG) {
+            if (filtered.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-6xl opacity-40">👥</span>
+                            <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">
+                                ${allSO.length === 0 ? 'ยังไม่มีใบสั่งซื้อ' : 'ไม่มีรายการที่ตรงกับตัวกรอง'}
+                            </p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Group by customer
+            const groups = {};
+            filtered.forEach(so => {
+                const key = so.customerName || 'ไม่ระบุลูกค้า';
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(so);
+            });
+
+            // Sort customers by total revenue descending
+            const sortedCustomers = Object.entries(groups).sort((a, b) => {
+                const totalA = a[1].reduce((s, so) => s + parseNum(so.grandTotal), 0);
+                const totalB = b[1].reduce((s, so) => s + parseNum(so.grandTotal), 0);
+                return totalB - totalA;
+            });
+
+            // Grand totals
+            const grandTotal = filtered.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+            const grandQty = filtered.reduce((s, so) => s + (so.items || []).reduce((qs, i) => qs + parseNum(i.qty), 0), 0);
+            const grandWeight = filtered.reduce((s, so) => s + (so.items || []).reduce((ws, i) => ws + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0), 0);
+
+            // Colors for ranking
+            const rankColors = ['🥇', '🥈', '🥉'];
+
+            return `
+                <!-- Customer Summary Header -->
+                <div class="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 rounded-2xl border-2 border-purple-200 dark:border-purple-800 p-5 shadow-lg">
+                    <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                        <span class="text-xl">👥</span>
+                        สรุปตามลูกค้า (Customer Summary)
+                    </h3>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-purple-200 dark:border-purple-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">จำนวนลูกค้า</p>
+                            <p class="text-2xl font-bold text-gray-800 dark:text-white">${sortedCustomers.length}</p>
+                            <p class="text-xs text-gray-400">${filtered.length} SO</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-purple-200 dark:border-purple-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">ยอดรวมทั้งหมด</p>
+                            <p class="text-2xl font-bold text-green-600 dark:text-green-400">${formatCurrency(grandTotal)}</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-purple-200 dark:border-purple-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">กระสอบรวม</p>
+                            <p class="text-2xl font-bold text-blue-600 dark:text-blue-400">${formatNumber(grandQty)}</p>
+                            <p class="text-xs text-gray-400">กระสอบ</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-purple-200 dark:border-purple-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">น้ำหนักรวม</p>
+                            <p class="text-2xl font-bold text-purple-600 dark:text-purple-400">${formatNumber(grandWeight)}</p>
+                            <p class="text-xs text-gray-400">กก. (${(grandWeight / 1000).toFixed(2)} ตัน)</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Customer Ranking Bar -->
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-5">
+                    <h4 class="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">🏆 จัดอันดับลูกค้า (ตามยอดสั่งซื้อ)</h4>
+                    <div class="space-y-2">
+                        ${sortedCustomers.slice(0, 10).map(([name, sos], idx) => {
+                const custTotal = sos.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+                const pct = grandTotal > 0 ? (custTotal / grandTotal * 100) : 0;
+                const barColor = idx === 0 ? '#8b5cf6' : idx === 1 ? '#6366f1' : idx === 2 ? '#818cf8' : '#a5b4fc';
+                return '<div class="flex items-center gap-3">' +
+                    '<span class="text-sm w-6 text-center">' + (idx < 3 ? rankColors[idx] : (idx + 1)) + '</span>' +
+                    '<span class="text-sm font-medium text-gray-800 dark:text-white w-28 truncate" title="' + name + '">' + name + '</span>' +
+                    '<div class="flex-1 h-6 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">' +
+                    '<div class="h-full rounded-full flex items-center px-2 transition-all" style="width: ' + Math.max(pct, 3) + '%; background: ' + barColor + ';">' +
+                    '<span class="text-[10px] text-white font-bold whitespace-nowrap">' + pct.toFixed(1) + '%</span>' +
+                    '</div>' +
+                    '</div>' +
+                    '<span class="text-sm font-bold text-green-600 dark:text-green-400 w-28 text-right">' + formatCurrency(custTotal) + '</span>' +
+                    '<span class="text-xs text-gray-400 w-12 text-right">' + sos.length + ' SO</span>' +
+                    '</div>';
+            }).join('')}
+                    </div>
+                </div>
+
+                <!-- Per-Customer Detail Cards -->
+                ${sortedCustomers.map(([name, sos], idx) => {
+                const custTotal = sos.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+                const custQty = sos.reduce((s, so) => s + (so.items || []).reduce((qs, i) => qs + parseNum(i.qty), 0), 0);
+                const custWeight = sos.reduce((s, so) => s + (so.items || []).reduce((ws, i) => ws + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0), 0);
+                const pct = grandTotal > 0 ? (custTotal / grandTotal * 100) : 0;
+
+                const statusBreakdown = {};
+                sos.forEach(so => {
+                    if (!statusBreakdown[so.status]) statusBreakdown[so.status] = { count: 0 };
+                    statusBreakdown[so.status].count++;
+                });
+
+                // Sort SOs by delivery date
+                const sortedSOs = [...sos].sort((a, b) => (b.deliveryDate || '').localeCompare(a.deliveryDate || ''));
+
+                return `
+                        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden">
+                            <div class="p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all border-b border-gray-100 dark:border-gray-700" onclick="this.parentElement.querySelector('.cust-detail').classList.toggle('hidden')">
+                                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center shadow-sm">
+                                            <span class="text-lg font-bold text-purple-600 dark:text-purple-400">${name.charAt(0).toUpperCase()}</span>
+                                        </div>
+                                        <div>
+                                            <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
+                                                ${idx < 3 ? rankColors[idx] : ''} ${name}
+                                            </h3>
+                                            <div class="flex items-center gap-3 mt-0.5 flex-wrap">
+                                                <span class="text-xs text-gray-500 dark:text-gray-400">${sos.length} ใบสั่งซื้อ</span>
+                                                <span class="text-xs text-gray-400">•</span>
+                                                <span class="text-xs text-blue-600 dark:text-blue-400 font-medium">${formatNumber(custQty)} กระสอบ</span>
+                                                <span class="text-xs text-gray-400">•</span>
+                                                <span class="text-xs text-purple-600 dark:text-purple-400 font-medium">${formatNumber(custWeight)} กก.</span>
+                                                <span class="text-xs text-gray-400">•</span>
+                                                <span class="text-xs text-orange-600 dark:text-orange-400 font-medium">${pct.toFixed(1)}%</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex items-center gap-1.5 flex-wrap">
+                                            ${Object.entries(statusBreakdown).map(([status, data]) => {
+                    const cfg = STATUS_CONFIG[status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                    return '<span class="px-2 py-1 rounded-full text-[10px] font-semibold ' + cfg.color + '">' + cfg.icon + ' ' + data.count + '</span>';
+                }).join('')}
+                                        </div>
+                                        <p class="text-xl font-bold text-green-600 dark:text-green-400">${formatCurrency(custTotal)}</p>
+                                        <span class="text-gray-400 dark:text-gray-500 text-sm">▼</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="cust-detail ${idx > 4 ? 'hidden' : ''}">
+                                <div class="overflow-x-auto">
+                                    <table class="w-full">
+                                        <thead class="bg-gray-50 dark:bg-gray-900/50">
+                                            <tr>
+                                                <th class="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">เลขที่ SO</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">วันสั่ง</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">วันจัดส่ง</th>
+                                                <th class="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">สินค้า</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">จำนวน</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">น้ำหนัก</th>
+                                                <th class="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ยอดเงิน</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">สถานะ</th>
+                                                <th class="px-4 py-2.5 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">จัดการ</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                            ${sortedSOs.map(so => {
+                    const cfg = STATUS_CONFIG[so.status] || STATUS_CONFIG['จัดเตรียมผลิต'];
+                    const itemsSummary = (so.items || []).map(i => i.product).filter(Boolean).join(', ');
+                    const soQty = (so.items || []).reduce((s, i) => s + parseNum(i.qty), 0);
+                    const soWeight = (so.items || []).reduce((s, i) => s + (parseNum(i.totalWeight) || (parseNum(i.qty) * parseNum(i.packSize))), 0);
+                    return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-all">' +
+                        '<td class="px-4 py-3"><span class="font-bold text-sm text-green-600 dark:text-green-400">' + so.soNumber + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><span class="text-xs text-gray-500">' + (so.orderDate ? formatDate(so.orderDate) : '-') + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><span class="text-xs text-orange-600 dark:text-orange-400 font-medium">' + (so.deliveryDate ? formatDate(so.deliveryDate) : '-') + '</span></td>' +
+                        '<td class="px-4 py-3"><span class="text-xs text-gray-600 dark:text-gray-400 line-clamp-1">' + (itemsSummary || '-') + '</span></td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm font-semibold text-gray-800 dark:text-white">' + formatNumber(soQty) + '</span></td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm text-blue-600 dark:text-blue-400">' + (soWeight > 0 ? formatNumber(soWeight) : '-') + '</span></td>' +
+                        '<td class="px-4 py-3 text-right"><span class="text-sm font-bold text-green-600 dark:text-green-400">' + formatCurrency(parseNum(so.grandTotal)) + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><span class="px-2 py-1 rounded-full text-[10px] font-semibold ' + cfg.color + '">' + cfg.icon + ' ' + so.status + '</span></td>' +
+                        '<td class="px-4 py-3 text-center"><div class="flex items-center justify-center gap-1">' +
+                        '<button onclick="printSO(\'' + so.id + '\')" class="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg text-xs" title="พิมพ์">🖨️</button>' +
+                        '<button onclick="editSO(\'' + so.id + '\')" class="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg text-xs" title="แก้ไข">' + icons.edit + '</button>' +
+                        '</div></td></tr>';
+                }).join('')}
+                                            <tr class="bg-purple-50 dark:bg-purple-900/10 font-semibold">
+                                                <td class="px-4 py-3 text-sm text-gray-700 dark:text-gray-300" colspan="4">👤 รวม ${name} (${sos.length} SO)</td>
+                                                <td class="px-4 py-3 text-right text-sm text-gray-800 dark:text-white">${formatNumber(custQty)}</td>
+                                                <td class="px-4 py-3 text-right text-sm text-blue-600 dark:text-blue-400">${formatNumber(custWeight)}</td>
+                                                <td class="px-4 py-3 text-right text-sm font-bold text-green-600 dark:text-green-400">${formatCurrency(custTotal)}</td>
+                                                <td class="px-4 py-3" colspan="2"></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+            }).join('')}
+            `;
+        }
+
+        function renderOrdersPayment(filtered, allSO, STATUS_CONFIG) {
+            if (filtered.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-12 text-center">
+                        <div class="flex flex-col items-center gap-4">
+                            <span class="text-6xl opacity-40">💳</span>
+                            <p class="text-xl font-semibold text-gray-500 dark:text-gray-400">ไม่มีรายการ</p>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Classify payment status
+            const classify = (so) => {
+                const total = parseNum(so.grandTotal);
+                const paid = parseNum(so.paidAmount || 0);
+                if (paid >= total && total > 0) return 'paid';
+                if (paid > 0) return 'partial';
+                return 'unpaid';
+            };
+
+            const unpaid = filtered.filter(so => classify(so) === 'unpaid');
+            const partial = filtered.filter(so => classify(so) === 'partial');
+            const paid = filtered.filter(so => classify(so) === 'paid');
+
+            const totalAmount = filtered.reduce((s, so) => s + parseNum(so.grandTotal), 0);
+            const totalPaid = filtered.reduce((s, so) => s + parseNum(so.paidAmount || 0), 0);
+            const totalOutstanding = totalAmount - totalPaid;
+
+            // Sort outstanding first (most owed), then partial, then paid
+            const sorted = [
+                ...unpaid.sort((a, b) => parseNum(b.grandTotal) - parseNum(a.grandTotal)),
+                ...partial.sort((a, b) => (parseNum(b.grandTotal) - parseNum(b.paidAmount || 0)) - (parseNum(a.grandTotal) - parseNum(a.paidAmount || 0))),
+                ...paid.sort((a, b) => parseNum(b.grandTotal) - parseNum(a.grandTotal))
+            ];
+
+            return `
+                <!-- Payment Summary Cards -->
+                <div class="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl border-2 border-amber-200 dark:border-amber-800 p-5 shadow-lg">
+                    <h3 class="font-bold text-lg text-gray-800 dark:text-white mb-3 flex items-center gap-2">
+                        <span class="text-xl">💰</span>
+                        ติดตามการชำระเงิน (Payment Tracking)
+                    </h3>
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-amber-200 dark:border-amber-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">ยอดรวมทั้งหมด</p>
+                            <p class="text-2xl font-bold text-gray-800 dark:text-white">${formatCurrency(totalAmount)}</p>
+                            <p class="text-xs text-gray-400">${filtered.length} SO</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-red-200 dark:border-red-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">❌ ยังไม่จ่าย</p>
+                            <p class="text-2xl font-bold text-red-600 dark:text-red-400">${unpaid.length}</p>
+                            <p class="text-xs text-red-500">${formatCurrency(unpaid.reduce((s, so) => s + parseNum(so.grandTotal), 0))}</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-yellow-200 dark:border-yellow-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">⏳ จ่ายบางส่วน</p>
+                            <p class="text-2xl font-bold text-yellow-600 dark:text-yellow-400">${partial.length}</p>
+                            <p class="text-xs text-yellow-500">${formatCurrency(partial.reduce((s, so) => s + parseNum(so.grandTotal) - parseNum(so.paidAmount || 0), 0))} ค้าง</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border border-green-200 dark:border-green-800 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">✅ จ่ายครบแล้ว</p>
+                            <p class="text-2xl font-bold text-green-600 dark:text-green-400">${paid.length}</p>
+                            <p class="text-xs text-green-500">${formatCurrency(paid.reduce((s, so) => s + parseNum(so.grandTotal), 0))}</p>
+                        </div>
+                        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 border-2 border-orange-300 dark:border-orange-700 shadow-sm">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">💸 ยอดค้างชำระรวม</p>
+                            <p class="text-2xl font-bold text-orange-600 dark:text-orange-400">${formatCurrency(totalOutstanding)}</p>
+                            <div class="mt-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div class="h-full bg-green-500 rounded-full" style="width: ${totalAmount > 0 ? (totalPaid / totalAmount * 100) : 0}%"></div>
+                            </div>
+                            <p class="text-[10px] text-gray-400 mt-0.5">ชำระแล้ว ${totalAmount > 0 ? (totalPaid / totalAmount * 100).toFixed(1) : 0}%</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Payment Table -->
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50 dark:bg-gray-900/50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">สถานะชำระ</th>
+                                    <th class="px-4 py-3 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">เลขที่ SO</th>
+                                    <th class="px-4 py-3 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ลูกค้า</th>
+                                    <th class="px-4 py-3 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">วันจัดส่ง</th>
+                                    <th class="px-4 py-3 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">เงื่อนไขชำระ</th>
+                                    <th class="px-4 py-3 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ยอดรวม</th>
+                                    <th class="px-4 py-3 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ชำระแล้ว</th>
+                                    <th class="px-4 py-3 text-right text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ค้างชำระ</th>
+                                    <th class="px-4 py-3 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">ความคืบหน้า</th>
+                                    <th class="px-4 py-3 text-center text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">จัดการ</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                                ${sorted.map(so => {
+                const total = parseNum(so.grandTotal);
+                const paidAmt = parseNum(so.paidAmount || 0);
+                const outstanding = total - paidAmt;
+                const pct = total > 0 ? (paidAmt / total * 100) : 0;
+                const ps = classify(so);
+                const badge = ps === 'paid'
+                    ? '<span class="px-2 py-1 rounded-full text-[10px] font-bold bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">✅ จ่ายครบ</span>'
+                    : ps === 'partial'
+                        ? '<span class="px-2 py-1 rounded-full text-[10px] font-bold bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">⏳ จ่ายบางส่วน</span>'
+                        : '<span class="px-2 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">❌ ยังไม่จ่าย</span>';
+                const barColor = ps === 'paid' ? '#22c55e' : ps === 'partial' ? '#eab308' : '#ef4444';
+                return '<tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-all ' + (ps === 'unpaid' ? 'bg-red-50/30 dark:bg-red-900/5' : '') + '">' +
+                    '<td class="px-4 py-3">' + badge + '</td>' +
+                    '<td class="px-4 py-3"><span class="font-bold text-sm text-green-600 dark:text-green-400">' + so.soNumber + '</span></td>' +
+                    '<td class="px-4 py-3"><span class="text-sm font-medium text-gray-800 dark:text-white">' + (so.customerName || '-') + '</span></td>' +
+                    '<td class="px-4 py-3 text-center"><span class="text-xs text-orange-600 dark:text-orange-400">' + (so.deliveryDate ? formatDate(so.deliveryDate) : '-') + '</span></td>' +
+                    '<td class="px-4 py-3"><span class="text-xs text-gray-600 dark:text-gray-400">' + (so.paymentTerms || '-') + '</span></td>' +
+                    '<td class="px-4 py-3 text-right"><span class="text-sm font-bold text-gray-800 dark:text-white">' + formatCurrency(total) + '</span></td>' +
+                    '<td class="px-4 py-3 text-right"><span class="text-sm font-semibold text-green-600 dark:text-green-400">' + formatCurrency(paidAmt) + '</span></td>' +
+                    '<td class="px-4 py-3 text-right"><span class="text-sm font-bold ' + (outstanding > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400') + '">' + formatCurrency(outstanding) + '</span></td>' +
+                    '<td class="px-4 py-3">' +
+                    '<div class="w-24 mx-auto">' +
+                    '<div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">' +
+                    '<div class="h-full rounded-full" style="width: ' + Math.min(pct, 100) + '%; background: ' + barColor + ';"></div>' +
+                    '</div>' +
+                    '<p class="text-[10px] text-center text-gray-400 mt-0.5">' + pct.toFixed(0) + '%</p>' +
+                    '</div>' +
+                    '</td>' +
+                    '<td class="px-4 py-3 text-center">' +
+                    (ps !== 'paid' ?
+                        '<button onclick="recordPayment(\'' + so.id + '\')" class="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-all shadow-sm hover:shadow-md">💰 บันทึกชำระ</button>'
+                        :
+                        '<span class="text-green-500 text-sm">✅</span>'
+                    ) +
+                    '</td>' +
+                    '</tr>';
+            }).join('')}
+                                <!-- Totals Row -->
+                                <tr class="bg-amber-50 dark:bg-amber-900/10 font-semibold">
+                                    <td class="px-4 py-3 text-sm text-gray-700 dark:text-gray-300" colspan="5">💰 รวมทั้งหมด (${filtered.length} SO)</td>
+                                    <td class="px-4 py-3 text-right text-sm font-bold text-gray-800 dark:text-white">${formatCurrency(totalAmount)}</td>
+                                    <td class="px-4 py-3 text-right text-sm font-bold text-green-600 dark:text-green-400">${formatCurrency(totalPaid)}</td>
+                                    <td class="px-4 py-3 text-right text-sm font-bold text-red-600 dark:text-red-400">${formatCurrency(totalOutstanding)}</td>
+                                    <td class="px-4 py-3" colspan="2"></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Record payment modal
+        window.recordPayment = async function (soId) {
+            const so = mockData.salesOrders.find(o => o.id === soId);
+            if (!so) return;
+
+            const total = parseNum(so.grandTotal);
+            const currentPaid = parseNum(so.paidAmount || 0);
+            const outstanding = total - currentPaid;
+
+            const modalBg = document.createElement('div');
+            modalBg.className = 'fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4';
+            modalBg.innerHTML = `
+                <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+                    <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
+                        💰 บันทึกการชำระเงิน
+                    </h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">เลขที่ SO</span>
+                            <span class="font-bold text-green-600">${so.soNumber}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">ลูกค้า</span>
+                            <span class="font-medium">${so.customerName || '-'}</span>
+                        </div>
+                        <hr class="border-gray-200 dark:border-gray-700">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">ยอดรวม</span>
+                            <span class="font-bold text-gray-800 dark:text-white">${formatCurrency(total)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">ชำระแล้ว</span>
+                            <span class="font-semibold text-green-600">${formatCurrency(currentPaid)}</span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600 dark:text-gray-400">ค้างชำระ</span>
+                            <span class="font-bold text-red-600">${formatCurrency(outstanding)}</span>
+                        </div>
+                        <hr class="border-gray-200 dark:border-gray-700">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">จำนวนเงินที่ชำระ (บาท)</label>
+                            <input type="number" id="paymentAmountInput" value="${outstanding}" step="0.01" min="0" max="${outstanding}"
+                                class="w-full px-4 py-3 text-lg font-bold border-2 border-green-300 dark:border-green-700 rounded-xl dark:bg-gray-700 dark:text-white focus:border-green-500 focus:ring-2 focus:ring-green-200 transition-all text-right">
+                        </div>
+                        <div class="flex gap-2 pt-2">
+                            <button onclick="this.closest('.fixed').querySelector('#paymentAmountInput').value = ${outstanding}" 
+                                class="flex-1 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-xl text-sm font-semibold hover:bg-green-200 transition-all">ชำระครบ</button>
+                            <button onclick="this.closest('.fixed').querySelector('#paymentAmountInput').value = ${Math.round(outstanding / 2)}" 
+                                class="flex-1 py-2 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-xl text-sm font-semibold hover:bg-yellow-200 transition-all">ครึ่งหนึ่ง</button>
+                        </div>
+                    </div>
+                    <div class="flex gap-3 pt-2">
+                        <button onclick="this.closest('.fixed').remove()" 
+                            class="flex-1 py-3 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-300 transition-all">ยกเลิก</button>
+                        <button onclick="confirmPayment('${soId}')" 
+                            class="flex-1 py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all">✅ บันทึกชำระ</button>
+                    </div>
+                </div>
+            `;
+            modalBg.onclick = function (e) { if (e.target === modalBg) modalBg.remove(); };
+            document.body.appendChild(modalBg);
+            setTimeout(() => document.getElementById('paymentAmountInput')?.focus(), 100);
+        };
+
+        window.confirmPayment = async function (soId) {
+            const input = document.getElementById('paymentAmountInput');
+            if (!input) return;
+            const amount = parseNum(input.value);
+            if (amount <= 0) { showToast('กรุณาระบุจำนวนเงิน', 'error'); return; }
+
+            const so = mockData.salesOrders.find(o => o.id === soId);
+            if (!so) return;
+
+            const currentPaid = parseNum(so.paidAmount || 0);
+            so.paidAmount = currentPaid + amount;
+
+            // Auto-update status if fully paid
+            if (so.paidAmount >= parseNum(so.grandTotal)) {
+                so.status = 'จ่ายเงินสำเร็จ';
+            }
+
+            // Close modal
+            document.querySelectorAll('.fixed.z-50').forEach(el => el.remove());
+
+            try {
+                await saveToFirestore('salesOrders', so);
+                saveToCache();
+                showToast('บันทึกการชำระเงิน ' + formatCurrency(amount) + ' สำเร็จ!');
+                render();
+            } catch (error) {
+                showToast('เกิดข้อผิดพลาด!', 'error');
+            }
+        };
 
         function renderProduction() {
             return `
@@ -1560,48 +2920,101 @@
             const warehouseC = mockData.inventory.filter(i => i.location.includes('โกดัง C'));
             const others = mockData.inventory.filter(i => !i.location.includes('Zone') && !i.location.includes('โกดัง'));
 
+            // Apply custom sort to others
+            const othersSavedOrder = inventorySortOrder['__others__'];
+            const sortedOthers = (othersSavedOrder && othersSavedOrder.length > 0)
+                ? [...others].sort((a, b) => {
+                    const posA = othersSavedOrder.indexOf(a.id) === -1 ? 9999 : othersSavedOrder.indexOf(a.id);
+                    const posB = othersSavedOrder.indexOf(b.id) === -1 ? 9999 : othersSavedOrder.indexOf(b.id);
+                    return posA - posB;
+                }) : others;
+
             const renderZone = (title, items, color, icon, zoneName) => {
+                // Apply custom sort order
+                const savedOrder = inventorySortOrder[zoneName];
+                if (savedOrder && savedOrder.length > 0) {
+                    items = [...items].sort((a, b) => {
+                        const idxA = savedOrder.indexOf(a.id);
+                        const idxB = savedOrder.indexOf(b.id);
+                        const posA = idxA === -1 ? 9999 : idxA;
+                        const posB = idxB === -1 ? 9999 : idxB;
+                        return posA - posB;
+                    });
+                }
+
+                const totalStock = items.reduce((s, i) => s + parseNum(i.stock), 0);
+                const catIcons = { 'ข้าวสาร': '🌾', 'ข้าวเปลือก': '🌿', 'ข้าวหัก/ปลาย': '🍚', 'Reject': '⚠️', 'วัสดุบรรจุภัณฑ์': '📦' };
+                const maxStock = items.length > 0 ? Math.max(...items.map(i => parseNum(i.stock))) : 1;
+
                 return `
-                    <div class="p-5 rounded-2xl border-2 border-${color}-200 dark:border-${color}-800 bg-gradient-to-br from-${color}-50 to-white dark:from-${color}-900/20 dark:to-gray-800 shadow-lg">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
-                                <span class="text-xl">${icon}</span>
-                                ${title}
-                                <span class="text-sm font-normal text-gray-500 dark:text-gray-400">(${items.length} รายการ)</span>
-                            </h3>
+                    <div class="p-5 rounded-2xl border-2 border-${color}-200 dark:border-${color}-800 bg-gradient-to-br from-${color}-50/80 to-white dark:from-${color}-900/20 dark:to-gray-800 shadow-lg">
+                        <div class="flex justify-between items-center mb-3">
+                            <div>
+                                <h3 class="font-bold text-base text-gray-800 dark:text-white flex items-center gap-2">
+                                    <span class="text-xl">${icon}</span>
+                                    ${title}
+                                </h3>
+                                <div class="flex items-center gap-3 mt-1">
+                                    <span class="text-xs text-gray-500 dark:text-gray-400">${items.length} รายการ</span>
+                                    ${totalStock > 0 ? `<span class="text-xs font-semibold text-${color}-600 dark:text-${color}-400">รวม ${formatNumber(totalStock)} กก.</span>` : ''}
+                                </div>
+                            </div>
                             <button onclick="event.stopPropagation(); openInventoryFormWithZone('${zoneName}')" 
                                 class="p-2 bg-${color}-600 hover:bg-${color}-700 text-white rounded-lg shadow-md hover:shadow-lg transition-all flex items-center gap-1" title="เพิ่มสินค้าใน ${zoneName}">
                                 <span class="text-lg font-bold">+</span>
                                 <span class="text-xs hidden sm:inline">เพิ่ม</span>
                             </button>
                         </div>
-                        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <div class="inv-grid inv-grid-3 inv-zone-container" data-zone="${zoneName}"
+                            ondragover="invDragOver(event, '${zoneName}')" 
+                            ondragleave="invDragLeave(event)" 
+                            ondrop="invDrop(event, '${zoneName}')">
                             ${items.length === 0 ? `
-                                <div class="col-span-full text-center py-8 text-gray-400 dark:text-gray-600">
-                                    <span class="text-3xl">📦</span>
-                                    <p class="mt-2">ยังไม่มีสินค้าใน ${zoneName}</p>
+                                <div class="col-span-full text-center py-6 text-gray-400 dark:text-gray-600">
+                                    <span class="text-4xl opacity-60">📦</span>
+                                    <p class="mt-2 text-sm">ยังไม่มีสินค้าใน ${zoneName}</p>
                                 </div>
                             ` : items.map(item => {
                     const isLow = parseNum(item.stock) < 1000;
+                    const stockPercent = Math.min((parseNum(item.stock) / maxStock) * 100, 100);
+                    const barColor = isLow ? '#ef4444' : stockPercent > 60 ? '#22c55e' : '#eab308';
+                    const catIcon = catIcons[item.category] || '📦';
                     return `
-                                    <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border-2 ${isLow ? 'border-red-300 dark:border-red-700' : 'border-gray-200 dark:border-gray-700'} hover:shadow-xl transition-all card-hover relative group">
-                                        <div class="flex justify-between items-start mb-2">
-                                            <span class="px-2 py-1 bg-${color}-600 text-white text-xs font-bold rounded-md">${item.code}</span>
-                                            <div class="flex items-center gap-1">
-                                                ${isLow ? `<span class="text-red-500 text-lg animate-pulse">${icons.alert}</span>` : ''}
+                                    <div class="inv-card bg-white dark:bg-gray-800 rounded-xl border ${isLow ? 'border-red-300 dark:border-red-700 shadow-red-100 dark:shadow-red-900/20' : 'border-gray-200 dark:border-gray-700'} shadow-md hover:shadow-xl group overflow-hidden"
+                                        draggable="true" data-item-id="${item.id}"
+                                        ondragstart="invDragStart(event, '${item.id}', '${zoneName}')"
+                                        ondragend="invDragEnd(event)">
+                                        <!-- Header with code badge & drag handle -->
+                                        <div class="flex items-center justify-between px-3 pt-3 pb-1">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="text-gray-300 dark:text-gray-600 cursor-grab active:cursor-grabbing select-none text-xs" title="ลากเพื่อเรียงลำดับ">⠿</span>
+                                                <span class="px-2 py-0.5 bg-${color}-600 text-white text-[10px] font-bold rounded">${item.code}</span>
+                                                <span class="text-xs" title="${item.category}">${catIcon}</span>
+                                            </div>
+                                            <div class="flex items-center gap-0.5">
+                                                ${isLow ? `<span class="text-red-500 text-sm animate-pulse">⚠️</span>` : ''}
                                                 <button onclick="event.stopPropagation(); deleteInventory('${item.id}')" 
-                                                    class="opacity-0 group-hover:opacity-100 p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all" title="ลบ">
-                                                    ${icons.delete}
+                                                    class="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all text-xs" title="ลบ">
+                                                    🗑️
                                                 </button>
                                             </div>
                                         </div>
-                                        <div onclick="editInventory('${item.id}')" class="cursor-pointer">
-                                            <h4 class="font-semibold text-sm text-gray-800 dark:text-white mb-2 line-clamp-2 min-h-[40px]">${item.item}</h4>
-                                            <div class="text-center py-2 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                                                <div class="text-2xl font-bold ${isLow ? 'text-red-600' : 'text-gray-800 dark:text-white'}">
-                                                    ${formatNumber(parseNum(item.stock))}
+                                        <!-- Content -->
+                                        <div onclick="editInventory('${item.id}')" class="cursor-pointer px-3 pb-3">
+                                            <h4 class="font-semibold text-sm text-gray-800 dark:text-white leading-tight line-clamp-1" title="${item.item}">${item.item}</h4>
+                                            <div class="flex items-end justify-between mt-2">
+                                                <div>
+                                                    <div class="text-xl font-bold ${isLow ? 'text-red-600' : 'text-gray-800 dark:text-white'} leading-none">
+                                                        ${formatNumber(parseNum(item.stock))}
+                                                    </div>
+                                                    <div class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">${item.category === 'วัสดุบรรจุภัณฑ์' ? 'ชิ้น' : 'กก.'}</div>
                                                 </div>
-                                                <div class="text-xs text-gray-500 dark:text-gray-400">${item.category === 'วัสดุบรรจุภัณฑ์' ? 'ชิ้น' : 'กก.'}</div>
+                                                <div class="text-right">
+                                                    <div class="text-[10px] text-gray-400 dark:text-gray-500">${item.location}</div>
+                                                </div>
+                                            </div>
+                                            <div class="stock-bar">
+                                                <div class="stock-bar-fill" style="width: ${stockPercent}%; background: ${barColor};"></div>
                                             </div>
                                         </div>
                                     </div>
@@ -1647,54 +3060,77 @@
 
                     <!-- Other Storage -->
                     <div class="p-5 rounded-2xl border-2 border-gray-200 dark:border-gray-700 bg-gradient-to-br from-gray-50 to-white dark:from-gray-800 dark:to-gray-900 shadow-lg">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
-                                <span class="text-xl">📁</span>
-                                พื้นที่อื่นๆ (Other Storage)
-                                <span class="text-sm font-normal text-gray-500 dark:text-gray-400">(${others.length} รายการ)</span>
-                            </h3>
+                        <div class="flex justify-between items-center mb-3">
+                            <div>
+                                <h3 class="font-bold text-base text-gray-800 dark:text-white flex items-center gap-2">
+                                    <span class="text-xl">📁</span>
+                                    พื้นที่อื่นๆ (Other Storage)
+                                </h3>
+                                <span class="text-xs text-gray-500 dark:text-gray-400">${others.length} รายการ</span>
+                            </div>
                             <button onclick="event.stopPropagation(); openInventoryForm()" 
                                 class="p-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg shadow-md hover:shadow-lg transition-all flex items-center gap-1" title="เพิ่มสินค้าใหม่">
                                 <span class="text-lg font-bold">+</span>
                                 <span class="text-xs hidden sm:inline">เพิ่ม</span>
                             </button>
                         </div>
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div class="inv-grid inv-grid-4 inv-zone-container" data-zone="__others__"
+                            ondragover="invDragOver(event, '__others__')" 
+                            ondragleave="invDragLeave(event)" 
+                            ondrop="invDrop(event, '__others__')">
                             ${others.length === 0 ? `
-                                <div class="col-span-full text-center py-8 text-gray-400 dark:text-gray-600">
-                                    <span class="text-3xl">📦</span>
-                                    <p class="mt-2">ยังไม่มีสินค้าในพื้นที่อื่นๆ</p>
+                                <div class="col-span-full text-center py-6 text-gray-400 dark:text-gray-600">
+                                    <span class="text-4xl opacity-60">📦</span>
+                                    <p class="mt-2 text-sm">ยังไม่มีสินค้าในพื้นที่อื่นๆ</p>
                                 </div>
-                            ` : others.map(item => {
-                const isLow = parseNum(item.stock) < 1000;
-                return `
-                                    <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border-2 ${isLow ? 'border-red-300 dark:border-red-700' : 'border-gray-200 dark:border-gray-700'} hover:shadow-xl transition-all card-hover relative group">
-                                        <div class="flex justify-between items-start mb-2">
-                                            <span class="px-2 py-1 bg-purple-600 text-white text-xs font-bold rounded-md">${item.code}</span>
-                                            <div class="flex items-center gap-1">
-                                                ${isLow ? `<span class="text-red-500 text-lg animate-pulse">${icons.alert}</span>` : ''}
+                            ` : (() => {
+                    const othersMaxStock = sortedOthers.length > 0 ? Math.max(...sortedOthers.map(i => parseNum(i.stock))) : 1;
+                    const catIcons2 = { 'ข้าวสาร': '🌾', 'ข้าวเปลือก': '🌿', 'ข้าวหัก/ปลาย': '🍚', 'Reject': '⚠️', 'วัสดุบรรจุภัณฑ์': '📦' };
+                    return sortedOthers.map(item => {
+                        const isLow = parseNum(item.stock) < 1000;
+                        const stockPercent = Math.min((parseNum(item.stock) / othersMaxStock) * 100, 100);
+                        const barColor = isLow ? '#ef4444' : stockPercent > 60 ? '#22c55e' : '#eab308';
+                        const catIcon = catIcons2[item.category] || '📦';
+                        return `
+                                    <div class="inv-card bg-white dark:bg-gray-800 rounded-xl border ${isLow ? 'border-red-300 dark:border-red-700' : 'border-gray-200 dark:border-gray-700'} shadow-md hover:shadow-xl group overflow-hidden"
+                                        draggable="true" data-item-id="${item.id}"
+                                        ondragstart="invDragStart(event, '${item.id}', '__others__')"
+                                        ondragend="invDragEnd(event)">
+                                        <div class="flex items-center justify-between px-3 pt-3 pb-1">
+                                            <div class="flex items-center gap-1.5">
+                                                <span class="text-gray-300 dark:text-gray-600 cursor-grab active:cursor-grabbing select-none text-xs" title="ลากเพื่อเรียงลำดับ">⠿</span>
+                                                <span class="px-2 py-0.5 bg-purple-600 text-white text-[10px] font-bold rounded">${item.code}</span>
+                                                <span class="text-xs" title="${item.category}">${catIcon}</span>
+                                            </div>
+                                            <div class="flex items-center gap-0.5">
+                                                ${isLow ? `<span class="text-red-500 text-sm animate-pulse">⚠️</span>` : ''}
                                                 <button onclick="event.stopPropagation(); deleteInventory('${item.id}')" 
-                                                    class="opacity-0 group-hover:opacity-100 p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all" title="ลบ">
-                                                    ${icons.delete}
+                                                    class="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-all text-xs" title="ลบ">
+                                                    🗑️
                                                 </button>
                                             </div>
                                         </div>
-                                        <div onclick="editInventory('${item.id}')" class="cursor-pointer">
-                                            <h4 class="font-semibold text-sm text-gray-800 dark:text-white mb-2 line-clamp-2 min-h-[40px]">${item.item}</h4>
-                                            <div class="text-center py-2 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                                                <div class="text-2xl font-bold ${isLow ? 'text-red-600' : 'text-gray-800 dark:text-white'}">
-                                                    ${formatNumber(parseNum(item.stock))}
+                                        <div onclick="editInventory('${item.id}')" class="cursor-pointer px-3 pb-3">
+                                            <h4 class="font-semibold text-sm text-gray-800 dark:text-white leading-tight line-clamp-1" title="${item.item}">${item.item}</h4>
+                                            <div class="flex items-end justify-between mt-2">
+                                                <div>
+                                                    <div class="text-xl font-bold ${isLow ? 'text-red-600' : 'text-gray-800 dark:text-white'} leading-none">
+                                                        ${formatNumber(parseNum(item.stock))}
+                                                    </div>
+                                                    <div class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">${item.category === 'วัสดุบรรจุภัณฑ์' ? 'ชิ้น' : 'กก.'}</div>
                                                 </div>
-                                                <div class="text-xs text-gray-500 dark:text-gray-400">${item.category === 'วัสดุบรรจุภัณฑ์' ? 'ชิ้น' : 'กก.'}</div>
+                                                <div class="text-right">
+                                                    <div class="text-[10px] text-gray-400 dark:text-gray-500">📍 ${item.location}</div>
+                                                </div>
                                             </div>
-                                            <div class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-2">
-                                                <span>📍</span>
-                                                ${item.location}
+                                            <div class="stock-bar">
+                                                <div class="stock-bar-fill" style="width: ${stockPercent}%; background: ${barColor};"></div>
                                             </div>
                                         </div>
                                     </div>
                                 `;
-            }).join('')}
+                    }).join('');
+                })()}
                         </div>
                     </div>
 
@@ -1706,24 +3142,24 @@
                         </h3>
                         <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
                             ${['ข้าวสาร', 'ข้าวเปลือก', 'ข้าวหัก/ปลาย', 'Reject', 'วัสดุบรรจุภัณฑ์'].map(cat => {
-                const items = mockData.inventory.filter(i => i.category === cat);
-                const total = items.reduce((s, i) => s + parseNum(i.stock), 0);
-                const colorMap = {
-                    'ข้าวสาร': 'green',
-                    'ข้าวเปลือก': 'yellow',
-                    'ข้าวหัก/ปลาย': 'blue',
-                    'Reject': 'red',
-                    'วัสดุบรรจุภัณฑ์': 'purple'
-                };
-                const color = colorMap[cat];
-                return `
+                    const items = mockData.inventory.filter(i => i.category === cat);
+                    const total = items.reduce((s, i) => s + parseNum(i.stock), 0);
+                    const colorMap = {
+                        'ข้าวสาร': 'green',
+                        'ข้าวเปลือก': 'yellow',
+                        'ข้าวหัก/ปลาย': 'blue',
+                        'Reject': 'red',
+                        'วัสดุบรรจุภัณฑ์': 'purple'
+                    };
+                    const color = colorMap[cat];
+                    return `
                                     <div class="p-4 bg-${color}-50 dark:bg-${color}-900/20 rounded-xl border border-${color}-200 dark:border-${color}-800 text-center">
                                         <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">${cat}</div>
                                         <div class="text-2xl font-bold text-${color}-600 dark:text-${color}-400">${formatNumber(total)}</div>
                                         <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">${items.length} รายการ</div>
                                     </div>
                                 `;
-            }).join('')}
+                }).join('')}
                         </div>
                     </div>
                 </div>
@@ -1861,11 +3297,25 @@
                                     <span class="text-2xl">${darkMode ? icons.sun : icons.moon}</span>
                                 </button>
                                 ${currentMenu === 'orders' ? `
-                                    <button onclick="openSOForm()" 
-                                        class="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
-                                        <span class="text-lg">${icons.plus}</span>
-                                        <span class="hidden sm:inline">สร้างใบสั่งซื้อ (SO)</span>
-                                    </button>
+                                    <div class="flex items-center gap-2">
+                                        <button onclick="downloadSOTemplate()" 
+                                            class="hidden sm:flex bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 px-3 py-2.5 rounded-xl text-sm font-medium transition-all items-center gap-1.5" title="ดาวน์โหลด Template Excel">
+                                            📄 Template
+                                        </button>
+                                        <button onclick="importSOFromExcel()" 
+                                            class="bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-400 px-4 py-2.5 rounded-xl font-semibold transition-all flex items-center gap-1.5 border border-blue-200 dark:border-blue-800" title="นำเข้าข้อมูลจาก Excel">
+                                            📥 <span class="hidden sm:inline">Import</span>
+                                        </button>
+                                        <button onclick="exportSOToExcel()" 
+                                            class="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400 px-4 py-2.5 rounded-xl font-semibold transition-all flex items-center gap-1.5 border border-emerald-200 dark:border-emerald-800" title="ส่งออกข้อมูลเป็น Excel">
+                                            📤 <span class="hidden sm:inline">Export</span>
+                                        </button>
+                                        <button onclick="openSOForm()" 
+                                            class="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
+                                            <span class="text-lg">${icons.plus}</span>
+                                            <span class="hidden sm:inline">สร้างใบสั่งซื้อ (SO)</span>
+                                        </button>
+                                    </div>
                                 ` : ''}
                             </div>
                         </header>
